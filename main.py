@@ -15,9 +15,14 @@ def remover_acentos(texto):
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
 
 def gerar_formas_variantes(termo):
+    termo = remover_acentos(termo)
     variantes = {termo}
-    if termo.endswith("s"): variantes.add(termo[:-1])
-    else: variantes.add(termo + "s")
+    if termo.endswith("s"): 
+        variantes.add(termo[:-1])
+    else: 
+        # Lógica simples para plural em português
+        if termo.endswith(("r", "z")): variantes.add(termo + "es")
+        else: variantes.add(termo + "s")
     return list(variantes)
 
 def slugify(text):
@@ -120,7 +125,6 @@ st.markdown("""
         .product-image-box { flex: 0 0 auto; text-decoration:none; }
         .product-info { flex: 1; word-break: break-word; overflow-wrap: anywhere; }
         hr.product-separator { border: none; border-top: 1px solid #eee; margin: 10px 0; }
-        .info-cinza { color: gray; font-size: 0.8rem; }
         [data-testid="stColumn"] {
             overflow-y: auto; max-height: 90vh; padding: 10px; border: 1px solid #f0f2f6; border-radius: 8px;
             max-width: 600px; margin-left: auto; margin-right: auto; background: transparent;
@@ -131,24 +135,31 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
-termo = st.text_input("🔎 Digite o nome do produto:", "Banana").strip()
+termo = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
 
 if termo:
-    termos_busca = gerar_formas_variantes(remover_acentos(termo))
+    termos_busca = gerar_formas_variantes(termo)
     palavras_chave = remover_acentos(termo).split()
 
     with st.spinner("🔍 Buscando no Nagumo..."):
         raw_nagumo = []
-        for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t))
+        for t in termos_busca: 
+            raw_nagumo.extend(buscar_nagumo(t))
         
         vistos_nagumo = set()
         nagumo_final = []
+        
         for p in raw_nagumo:
             sku = p.get('sku')
             if sku and sku not in vistos_nagumo:
                 vistos_nagumo.add(sku)
-                nome, desc = p.get('name', ''), p.get('description', '')
-                if all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
+                nome = p.get('name', '')
+                desc = p.get('description', '') or ""
+                texto_comparar = remover_acentos(f"{nome} {desc}")
+                
+                # Filtro mais flexível: se a busca for "cenoura", 
+                # aceita se o termo estiver contido, mesmo que existam outras palavras
+                if any(t in texto_comparar for t in termos_busca):
                     promo = p.get('promotion') or {}
                     cond = promo.get('conditions') or []
                     preco_normal = p.get('price', 0)
@@ -164,7 +175,6 @@ if termo:
         
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'] or 999)
 
-    # Centralizando a coluna única
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
@@ -183,11 +193,11 @@ if termo:
             img = imgs[0] if (isinstance(imgs, list) and imgs) else DEFAULT_IMAGE_URL
             
             titulo = p['name']
-            texto_completo = p['name'] + " " + p.get('description', '')
+            texto_completo = p['name'] + " " + (p.get('description') or "")
             
             if contem_papel_toalha(texto_completo):
                 _, _, _, texto_exibicao = extrair_info_papel_toalha(p['name'], p.get('description', ''))
-                if texto_exibicao: titulo += f" <span class='info-cinza'>({texto_exibicao})</span>"
+                if texto_exibicao: titulo += f" <span style='color:gray; font-size:0.8rem;'>({texto_exibicao})</span>"
                 
             if "papel higi" in remover_acentos(titulo.lower()):
                 titulo = re.sub(r"(folha simples)", r"<span style='color:red; font-weight:bold;'>\1</span>", titulo, flags=re.IGNORECASE)
@@ -217,14 +227,11 @@ if termo:
                 <hr class='product-separator' />
             """, unsafe_allow_html=True)
 
-    # Forçar rolagem ao topo
     components.html(
         f"""
         <script>
             const cols = window.parent.document.querySelectorAll('[data-testid="stColumn"]');
             cols.forEach(col => col.scrollTop = 0);
         </script>
-        """,
-        height=0,
-        width=0
+        """, height=0, width=0
     )
