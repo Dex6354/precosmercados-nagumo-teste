@@ -15,12 +15,11 @@ def remover_acentos(texto):
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
 
 def gerar_formas_variantes(termo):
-    termo = remover_acentos(termo)
+    termo = remover_acentos(termo).strip()
     variantes = {termo}
     if termo.endswith("s"): 
         variantes.add(termo[:-1])
     else: 
-        # Lógica simples para plural em português
         if termo.endswith(("r", "z")): variantes.add(termo + "es")
         else: variantes.add(termo + "s")
     return list(variantes)
@@ -128,22 +127,21 @@ st.markdown("""
         [data-testid="stColumn"] {
             overflow-y: auto; max-height: 90vh; padding: 10px; border: 1px solid #f0f2f6; border-radius: 8px;
             max-width: 600px; margin-left: auto; margin-right: auto; background: transparent;
-            scrollbar-width: thin; scrollbar-color: gray transparent;
         }
         header[data-testid="stHeader"] { display: none; }
     </style>
 """, unsafe_allow_html=True)
 
 st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
-termo = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
+termo_input = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
 
-if termo:
-    termos_busca = gerar_formas_variantes(termo)
-    palavras_chave = remover_acentos(termo).split()
-
+if termo_input:
+    termos_variantes = gerar_formas_variantes(termo_input)
+    
     with st.spinner("🔍 Buscando no Nagumo..."):
         raw_nagumo = []
-        for t in termos_busca: 
+        # Faz a busca na API com o termo original e variações
+        for t in termos_variantes:
             raw_nagumo.extend(buscar_nagumo(t))
         
         vistos_nagumo = set()
@@ -153,27 +151,41 @@ if termo:
             sku = p.get('sku')
             if sku and sku not in vistos_nagumo:
                 vistos_nagumo.add(sku)
-                nome = p.get('name', '')
-                desc = p.get('description', '') or ""
-                texto_comparar = remover_acentos(f"{nome} {desc}")
+                nome_original = p.get('name', '')
+                nome_clean = remover_acentos(nome_original)
+                desc_clean = remover_acentos(p.get('description', '') or "")
                 
-                # Filtro mais flexível: se a busca for "cenoura", 
-                # aceita se o termo estiver contido, mesmo que existam outras palavras
-                if any(t in texto_comparar for t in termos_busca):
+                # --- NOVA LÓGICA DE FILTRO (PALAVRA EXATA OU CONTIDA) ---
+                match_found = False
+                for t in termos_variantes:
+                    # Verifica se é a palavra exata ou se está isolada no texto (ex: "Cenoura" em "Cenoura kg")
+                    if re.search(rf"\b{re.escape(t)}\b", nome_clean) or re.search(rf"\b{re.escape(t)}\b", desc_clean):
+                        match_found = True
+                        break
+                
+                if match_found:
                     promo = p.get('promotion') or {}
                     cond = promo.get('conditions') or []
                     preco_normal = p.get('price', 0)
                     preco_final = cond[0].get('price') if (promo.get('isActive') and cond) else preco_normal
                     
-                    p['url_final'] = f"https://www.nagumo.com.br/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
-                    label = calcular_preco_unitario_nagumo(preco_final, desc, nome, p.get('unit'))
+                    p['url_final'] = f"https://www.nagumo.com.br/categoria/departamentos/p/{slugify(nome_original)}-{sku}.html"
+                    label = calcular_preco_unitario_nagumo(preco_final, p.get('description', ''), nome_original, p.get('unit'))
                     p['unit_label'] = label
                     p['sort_val'] = extrair_valor_unitario(label)
                     p['preco_final'] = preco_final
                     p['preco_normal'] = preco_normal
                     nagumo_final.append(p)
         
-        nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'] or 999)
+        # Ordenação: itens onde o nome é exatamente o termo de busca vêm primeiro
+        def prioridade_ordenacao(item):
+            nome = remover_acentos(item['name'])
+            # Se o nome for exatamente um dos termos variantes, prioridade máxima (0)
+            if any(t == nome.strip() for t in termos_variantes):
+                return (0, item['sort_val'])
+            return (1, item['sort_val'])
+
+        nagumo_final = sorted(nagumo_final, key=prioridade_ordenacao)
 
     _, col_center, _ = st.columns([1, 2, 1])
 
@@ -193,21 +205,12 @@ if termo:
             img = imgs[0] if (isinstance(imgs, list) and imgs) else DEFAULT_IMAGE_URL
             
             titulo = p['name']
-            texto_completo = p['name'] + " " + (p.get('description') or "")
-            
-            if contem_papel_toalha(texto_completo):
-                _, _, _, texto_exibicao = extrair_info_papel_toalha(p['name'], p.get('description', ''))
-                if texto_exibicao: titulo += f" <span style='color:gray; font-size:0.8rem;'>({texto_exibicao})</span>"
-                
-            if "papel higi" in remover_acentos(titulo.lower()):
-                titulo = re.sub(r"(folha simples)", r"<span style='color:red; font-weight:bold;'>\1</span>", titulo, flags=re.IGNORECASE)
-                titulo = re.sub(r"(folha dupla|folha tripla)", r"<span style='color:green; font-weight:bold;'>\1</span>", titulo, flags=re.IGNORECASE)
-
             preco_normal = p['preco_normal']
             preco_final = p['preco_final']
+            
             if preco_final < preco_normal:
-                desconto_percentual = ((preco_normal - preco_final) / preco_normal) * 100
-                preco_html = f"<span style='font-weight: bold; font-size: 1rem;'>R$ {preco_final:.2f}</span> <span style='color: red; font-weight: bold;'> ({desconto_percentual:.0f}% OFF)</span><br><span style='text-decoration: line-through; color: gray;'>R$ {preco_normal:.2f}</span>"
+                desconto = ((preco_normal - preco_final) / preco_normal) * 100
+                preco_html = f"<span style='font-weight: bold; font-size: 1rem;'>R$ {preco_final:.2f}</span> <span style='color: red; font-weight: bold;'> ({desconto:.0f}% OFF)</span><br><span style='text-decoration: line-through; color: gray;'>R$ {preco_normal:.2f}</span>"
             else:
                 preco_html = f"<span style='font-weight: bold; font-size: 1rem;'>R$ {preco_normal:.2f}</span>"
 
@@ -221,7 +224,6 @@ if termo:
                         <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:inherit;'><strong>{titulo}</strong></a><br>
                         <strong>{preco_html}</strong><br>
                         <div style="margin-top: 4px; font-size: 0.9em; color: #666;">{p['unit_label']}</div>
-                        <div style="color: gray; font-size: 0.8em;">Estoque: {p.get('stock', 0)}</div>
                     </div>
                 </div>
                 <hr class='product-separator' />
