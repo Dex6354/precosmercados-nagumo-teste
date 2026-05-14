@@ -44,29 +44,25 @@ def slugify(text):
 def produto_relevante(nome, descricao, palavras_chave):
     """
     Verifica se o produto é relevante para a busca.
-    Aceita produto se TODAS as palavras-chave aparecem no NOME (não só na descrição),
-    OU se todas aparecem na concatenação nome+descrição.
-    Para buscas de termo único (ex: 'cenoura'), basta aparecer no nome.
+
+    - Busca de 1 palavra (ex: 'cenoura', 'tomate'):
+        A API já filtra por relevância. Aceitamos tudo que ela retornar,
+        pois filtrar demais exclui produtos simples como 'Cenoura' e 'Tomate'.
+
+    - Busca de 2+ palavras (ex: 'leite integral'):
+        Exige que TODAS as palavras apareçam no nome+descrição,
+        evitando resultados totalmente fora do assunto.
     """
     nome_sem_acento = remover_acentos(nome)
     desc_sem_acento = remover_acentos(descricao)
     texto_completo = f"{nome_sem_acento} {desc_sem_acento}"
 
-    # Todas as palavras no nome sozinho (critério mais rigoroso mas prioritário)
-    if all(k in nome_sem_acento for k in palavras_chave):
-        return True
-
-    # Todas as palavras no nome+descrição
-    if all(k in texto_completo for k in palavras_chave):
-        return True
-
-    # Para buscas de uma só palavra: aceita se aparece em qualquer campo
+    # Busca simples de 1 palavra: confiar na API, não filtrar
     if len(palavras_chave) == 1:
-        kw = palavras_chave[0]
-        if kw in nome_sem_acento or kw in desc_sem_acento:
-            return True
+        return True
 
-    return False
+    # Busca composta: todas as palavras devem aparecer
+    return all(k in texto_completo for k in palavras_chave)
 
 # --- LÓGICA DE CÁLCULO NAGUMO ---
 def contem_papel_toalha(texto):
