@@ -3,98 +3,22 @@ import streamlit.components.v1 as components
 import requests
 import unicodedata
 import re
-import html as html_module
+import time
 
-# --- CONFIGURACOES ---
+# --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
-BASE_URL = "https://www.nagumo.com.br"
 
-INSTALEAP_URL = "https://nextgentheadless.instaleap.io/api/v3"
-PRODUCT_FIELDS = "name price photosUrl sku stock description unit promotion { isActive conditions { price priceBeforeTaxes } }"
-
-HEADERS_BROWSER = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "pt-BR,pt;q=0.9",
-    "Referer": "https://www.nagumo.com.br/"
-}
-
-# Mapeamento: palavras-chave → categorias SFCC a buscar (mais especificas primeiro)
-# Gerado a partir do menu real do site
-CATEGORIA_MAP = {
-    # Hortifruti - frutas
-    "banana": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
-    "maca": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
-    "laranja": ["/categoria/departamentos/hortifruti/frutas/fruta-citrica/", "/categoria/departamentos/hortifruti/frutas/"],
-    "limao": ["/categoria/departamentos/hortifruti/frutas/fruta-citrica/", "/categoria/departamentos/hortifruti/frutas/"],
-    "morango": ["/categoria/departamentos/hortifruti/frutas/fruta-especial/", "/categoria/departamentos/hortifruti/frutas/"],
-    "uva": ["/categoria/departamentos/hortifruti/frutas/fruta-especial/", "/categoria/departamentos/hortifruti/frutas/"],
-    "manga": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
-    "mamao": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
-    "melao": ["/categoria/departamentos/hortifruti/frutas/fruta-hidratantes/", "/categoria/departamentos/hortifruti/frutas/"],
-    "melancia": ["/categoria/departamentos/hortifruti/frutas/fruta-hidratantes/", "/categoria/departamentos/hortifruti/frutas/"],
-    "abacaxi": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
-    "pera": ["/categoria/departamentos/hortifruti/frutas/fruta-especial/", "/categoria/departamentos/hortifruti/frutas/"],
-    "pessego": ["/categoria/departamentos/hortifruti/frutas/fruta-especial/", "/categoria/departamentos/hortifruti/frutas/"],
-    "abacate": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
-    "coco": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
-    # Hortifruti - legumes tuberculos
-    "cenoura": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
-    "batata": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
-    "beterraba": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
-    "inhame": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
-    "mandioca": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
-    "aipim": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
-    "macaxeira": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
-    "rabanete": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
-    # Hortifruti - legumes caules e frutos
-    "tomate": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/", "/categoria/departamentos/hortifruti/legumes/"],
-    "abobrinha": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "pepino": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "pimentao": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "jiló": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "jilo": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "berinjela": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "chuchu": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "quiabo": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "milho": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "vagem": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "ervilha": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    "amendoim": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
-    # Hortifruti - bulbos
-    "cebola": ["/categoria/departamentos/hortifruti/legumes/bulbos/"],
-    "alho": ["/categoria/departamentos/hortifruti/legumes/bulbos/"],
-    # Hortifruti - verduras
-    "alface": ["/categoria/departamentos/hortifruti/verduras/"],
-    "couve": ["/categoria/departamentos/hortifruti/verduras/"],
-    "espinafre": ["/categoria/departamentos/hortifruti/verduras/"],
-    "rucula": ["/categoria/departamentos/hortifruti/verduras/"],
-    "agriao": ["/categoria/departamentos/hortifruti/verduras/"],
-    "repolho": ["/categoria/departamentos/hortifruti/verduras/"],
-    "brocolis": ["/categoria/departamentos/hortifruti/verduras/"],
-    "couve-flor": ["/categoria/departamentos/hortifruti/verduras/"],
-    "acelga": ["/categoria/departamentos/hortifruti/verduras/"],
-    # Hortifruti - ervas
-    "salsinha": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
-    "coentro": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
-    "manjericao": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
-    "cebolinha": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
-    "salsa": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
-    # Hortifruti - granjeiros
-    "ovo": ["/categoria/departamentos/hortifruti/granjeiros/ovos/"],
-    "ovos": ["/categoria/departamentos/hortifruti/granjeiros/ovos/"],
-    # Acougue
-    "frango": ["/categoria/departamentos/acougue/ave/ave-refrigerada/", "/categoria/departamentos/acougue/ave/"],
-    "picanha": ["/categoria/departamentos/acougue/bovino/bovino-manipulado/", "/categoria/departamentos/acougue/bovino/"],
-    "carne": ["/categoria/departamentos/acougue/bovino/", "/categoria/departamentos/acougue/"],
-    "peixe": ["/categoria/departamentos/peixaria/peixes/peixe-fresco/", "/categoria/departamentos/peixaria/peixes/"],
-}
-
-# --- FUNCOES UTILITARIAS ---
+# --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
     if not texto: return ""
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
+
+def gerar_formas_variantes(termo):
+    variantes = {termo}
+    if termo.endswith("s"): variantes.add(termo[:-1])
+    else: variantes.add(termo + "s")
+    return list(variantes)
 
 def slugify(text):
     text = remover_acentos(text)
@@ -102,24 +26,7 @@ def slugify(text):
     text = re.sub(r'[-\s]+', '-', text)
     return text
 
-def gerar_formas_variantes(termo):
-    variantes = set()
-    s = remover_acentos(termo)
-    variantes.add(s)
-    variantes.add(termo)
-    if s.endswith("s"):
-        variantes.add(s[:-1])
-    else:
-        variantes.add(s + "s")
-    return list(variantes)
-
-def produto_relevante(nome, descricao, palavras_chave):
-    texto = f"{remover_acentos(nome)} {remover_acentos(descricao)}"
-    if len(palavras_chave) == 1:
-        return True
-    return all(k in texto for k in palavras_chave)
-
-# --- CALCULO DE PRECO UNITARIO ---
+# --- LÓGICA DE CÁLCULO NAGUMO ---
 def contem_papel_toalha(texto):
     texto = remover_acentos(texto.lower())
     return "papel" in texto and "toalha" in texto
@@ -127,6 +34,7 @@ def contem_papel_toalha(texto):
 def extrair_info_papel_toalha(nome, descricao):
     texto_nome = remover_acentos(nome.lower())
     texto_completo = f"{texto_nome} {remover_acentos(descricao.lower())}"
+
     for texto in [texto_nome, texto_completo]:
         match = re.search(r'(\d+)\s*(un|unidades?|rolos?)\s*.*?(\d+)\s*(folhas|toalhas)', texto)
         if match:
@@ -134,16 +42,18 @@ def extrair_info_papel_toalha(nome, descricao):
             return rolos, folhas_por_rolo, rolos * folhas_por_rolo, f"{rolos} {match.group(2)}, {folhas_por_rolo} {match.group(4)}"
         match = re.search(r'(\d+)\s*(folhas|toalhas)', texto)
         if match: return None, None, int(match.group(1)), f"{match.group(1)} {match.group(2)}"
+    
     m_un = re.search(r"(\d+)\s*(un|unidades?)", texto_completo)
     if m_un: return None, None, int(m_un.group(1)), f"{m_un.group(1)} unidades"
     return None, None, None, None
 
-def calcular_preco_unitario(preco_valor, descricao, nome, unidade_api=None):
+def calcular_preco_unitario_nagumo(preco_valor, descricao, nome, unidade_api=None):
     texto_completo = f"{nome} {descricao}".lower()
     if contem_papel_toalha(texto_completo):
         rolos, folhas, total_folhas, txt = extrair_info_papel_toalha(nome, descricao)
         if total_folhas and total_folhas > 0: return f"R$ {preco_valor / total_folhas:.3f}/folha"
-        return "Preco por folha: n/d"
+        return "Preço por folha: n/d"
+
     if "papel higi" in texto_completo:
         m_rolos = re.search(r"(leve\s*0*|lv?\s*0*|lv?|l\s*0*|c/\s*0*)(\d+)", texto_completo)
         if not m_rolos: m_rolos = re.search(r"(\d+)\s*(rolos?|un|unidades?)", texto_completo)
@@ -154,6 +64,7 @@ def calcular_preco_unitario(preco_valor, descricao, nome, unidade_api=None):
                 metros = float(m_metros.group(1).replace(',', '.'))
                 if rolos > 0 and metros > 0: return f"R$ {preco_valor / rolos / metros:.3f}/m"
             except: pass
+
     fontes = [descricao.lower(), nome.lower()]
     for fonte in fontes:
         match_g = re.search(r"(\d+[.,]?\d*)\s*(g|gramas?)", fonte)
@@ -166,6 +77,7 @@ def calcular_preco_unitario(preco_valor, descricao, nome, unidade_api=None):
         if match_l and float(match_l.group(1).replace(',', '.')) > 0: return f"R$ {preco_valor / float(match_l.group(1).replace(',', '.')):.2f}/L"
         match_un = re.search(r"(\d+[.,]?\d*)\s*(un|unidades?)", fonte)
         if match_un and float(match_un.group(1).replace(',', '.')) > 0: return f"R$ {preco_valor / float(match_un.group(1).replace(',', '.')):.2f}/un"
+
     if unidade_api:
         u = unidade_api.lower()
         if u == 'kg': return f"R$ {preco_valor:.2f}/kg"
@@ -180,128 +92,22 @@ def extrair_valor_unitario(preco_unitario):
     if match: return float(match.group(1).replace(',', '.'))
     return float('inf')
 
-# --- FONTE 1: INSTALEAP ---
-def buscar_instaleap(term):
+# --- REQUISIÇÃO NAGUMO ---
+def buscar_nagumo(term):
+    url = "https://nextgentheadless.instaleap.io/api/v3"
+    headers = {"Content-Type": "application/json", "Origin": "https://www.nagumo.com", "User-Agent": "Mozilla/5.0"}
     payload = {
         "operationName": "SearchProducts",
-        "variables": {
-            "searchProductsInput": {
-                "clientId": "NAGUMO",
-                "storeReference": "22",
-                "currentPage": 1,
-                "pageSize": 50,
-                "search": [{"query": term}],
-                "filters": {}
-            }
-        },
-        "query": f"query SearchProducts($searchProductsInput: SearchProductsInput!) {{ searchProducts(searchProductsInput: $searchProductsInput) {{ products {{ {PRODUCT_FIELDS} }} }} }}"
+        "variables": {"searchProductsInput": {"clientId": "NAGUMO", "storeReference": "22", "currentPage": 1, "pageSize": 50, "search": [{"query": term}], "filters": {}}},
+        "query": "query SearchProducts($searchProductsInput: SearchProductsInput!) { searchProducts(searchProductsInput: $searchProductsInput) { products { name price photosUrl sku stock description unit promotion { isActive conditions { price priceBeforeTaxes } } } } }"
     }
     try:
-        r = requests.post(INSTALEAP_URL, headers={"Content-Type": "application/json", "Origin": BASE_URL}, json=payload, timeout=10)
+        r = requests.post(url, headers=headers, json=payload, timeout=10)
         return r.json().get('data', {}).get('searchProducts', {}).get('products', []) or []
-    except:
-        return []
-
-# --- FONTE 2: SCRAPING DE CATEGORIA SFCC ---
-def extrair_produtos_do_html(html_content):
-    """
-    Extrai produtos do HTML de uma pagina de categoria do Nagumo/SFCC.
-    Os dados vem como JSON embutido dentro de data attributes dos web components.
-    Formato: {"id":"13772","productName":"Cenoura","price":{"sales":{"value":11.98}},...}
-    """
-    decoded = html_module.unescape(html_content)
-    produtos = []
-    vistos = set()
-
-    # Encontrar todos os blocos JSON de produto pelo padrao {"id":"NNNN","productName":
-    for match in re.finditer(r'\{"id":"(\d+)","productName":"([^"]+)"[^{]*"price":\{"sales":\{"value":([\d.]+)', decoded):
-        sku = match.group(1)
-        if sku in vistos:
-            continue
-        vistos.add(sku)
-
-        # Pegar o JSON completo a partir desse match
-        start = match.start()
-        chunk = decoded[start:start + 3000]
-
-        nome = match.group(2)
-        preco = float(match.group(3))
-
-        # Extrair URL do produto
-        url_match = re.search(r'"productShowFullUrl":"(https://www\.nagumo\.com\.br[^"]+)"', chunk)
-        url = url_match.group(1) if url_match else f"{BASE_URL}/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
-
-        # Extrair imagem
-        img_match = re.search(r'"disUrl":"(https://assetsmn\.s3[^"]+)"', chunk)
-        img = img_match.group(1) if img_match else DEFAULT_IMAGE_URL
-
-        # Extrair estoque
-        ats_match = re.search(r'"ATSInGenerealStock":(\d+)', chunk)
-        estoque = int(ats_match.group(1)) if ats_match else 0
-
-        # Extrair peso medio (para calculo de preco/kg em hortifruti)
-        peso_match = re.search(r'"averageWeightDisplay":"([^"]+)"', chunk)
-        avg_weight = peso_match.group(1) if peso_match else ""
-
-        produtos.append({
-            'sku': sku,
-            'name': nome,
-            'price': preco,
-            'photosUrl': [img],
-            'stock': estoque,
-            'description': avg_weight,  # ex: "180g" — usado para calculo de preco unitario
-            'unit': '',
-            'promotion': None,
-            '_url_final': url,
-            '_fonte': 'sfcc'
-        })
-
-    return produtos
-
-def buscar_categoria_sfcc(url_categoria):
-    """Faz GET na pagina de categoria do SFCC e extrai produtos do HTML."""
-    try:
-        r = requests.get(BASE_URL + url_categoria, headers=HEADERS_BROWSER, timeout=15)
-        if r.status_code == 200:
-            return extrair_produtos_do_html(r.text)
-    except:
-        pass
-    return []
-
-def encontrar_categorias_para_termo(termo):
-    """Mapeia o termo para as URLs de categoria mais provaveis."""
-    s = remover_acentos(termo)
-    # Busca direta no mapa
-    if s in CATEGORIA_MAP:
-        return CATEGORIA_MAP[s]
-    # Busca parcial: termo contem uma das chaves
-    for chave, cats in CATEGORIA_MAP.items():
-        if chave in s or s in chave:
-            return cats
-    return []
-
-# --- BUSCA COMPLETA ---
-def buscar_tudo(termo):
-    resultados = []
-    termos = gerar_formas_variantes(termo)
-
-    # Fonte 1: Instaleap (mercearia, higiene, etc.)
-    for t in termos:
-        resultados.extend(buscar_instaleap(t))
-
-    # Fonte 2: Scraping de categoria SFCC (hortifruti, acougue, etc.)
-    categorias = encontrar_categorias_para_termo(remover_acentos(termo))
-    cats_visitadas = set()
-    for cat_url in categorias:
-        if cat_url not in cats_visitadas:
-            cats_visitadas.add(cat_url)
-            sfcc_produtos = buscar_categoria_sfcc(cat_url)
-            resultados.extend(sfcc_produtos)
-
-    return resultados, categorias
+    except: return []
 
 # --- INTERFACE STREAMLIT ---
-st.set_page_config(page_title="Precos Nagumo", page_icon="🛒", layout="wide")
+st.set_page_config(page_title="Preços Nagumo", page_icon="🛒", layout="wide")
 
 st.markdown("""
     <style>
@@ -324,51 +130,41 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h6>🛒 Precos Nagumo</h6>", unsafe_allow_html=True)
+st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
 termo = st.text_input("🔎 Digite o nome do produto:", "Banana").strip()
 
 if termo:
+    termos_busca = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
 
     with st.spinner("🔍 Buscando no Nagumo..."):
-        raw_nagumo, cats_buscadas = buscar_tudo(termo)
-
-        vistos = set()
+        raw_nagumo = []
+        for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t))
+        
+        vistos_nagumo = set()
         nagumo_final = []
         for p in raw_nagumo:
             sku = p.get('sku')
-            if not sku or sku in vistos:
-                continue
-            nome = p.get('name', '')
-            desc = p.get('description', '')
-            if not produto_relevante(nome, desc, palavras_chave):
-                continue
-            vistos.add(sku)
-
-            promo = p.get('promotion') or {}
-            cond = promo.get('conditions') or []
-            preco_normal = p.get('price', 0) or 0
-            preco_final = cond[0].get('price') if (promo.get('isActive') and cond) else preco_normal
-
-            url_final = p.get('_url_final') or f"{BASE_URL}/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
-
-            label = calcular_preco_unitario(preco_final, desc, nome, p.get('unit'))
-            p['url_final'] = url_final
-            p['unit_label'] = label
-            p['sort_val'] = extrair_valor_unitario(label)
-            p['preco_final'] = preco_final
-            p['preco_normal'] = preco_normal
-            nagumo_final.append(p)
-
+            if sku and sku not in vistos_nagumo:
+                vistos_nagumo.add(sku)
+                nome, desc = p.get('name', ''), p.get('description', '')
+                if all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
+                    promo = p.get('promotion') or {}
+                    cond = promo.get('conditions') or []
+                    preco_normal = p.get('price', 0)
+                    preco_final = cond[0].get('price') if (promo.get('isActive') and cond) else preco_normal
+                    
+                    p['url_final'] = f"https://www.nagumo.com.br/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
+                    label = calcular_preco_unitario_nagumo(preco_final, desc, nome, p.get('unit'))
+                    p['unit_label'] = label
+                    p['sort_val'] = extrair_valor_unitario(label)
+                    p['preco_final'] = preco_final
+                    p['preco_normal'] = preco_normal
+                    nagumo_final.append(p)
+        
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'] or 999)
 
-    # --- DEBUG ---
-    with st.expander(f"🐛 Debug — {len(raw_nagumo)} brutos / {len(nagumo_final)} exibidos"):
-        st.write("**Categorias SFCC buscadas:**", cats_buscadas if cats_buscadas else "nenhuma")
-        for p in raw_nagumo:
-            fonte = p.get('_fonte', 'instaleap')
-            st.write(f"[{fonte}] SKU={p.get('sku')} | Nome='{p.get('name')}' | Preco={p.get('price')} | Estoque={p.get('stock')}")
-
+    # Centralizando a coluna única
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
@@ -378,51 +174,52 @@ if termo:
             </h5>
         """, unsafe_allow_html=True)
         st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} produto(s) encontrado(s).</small></p>", unsafe_allow_html=True)
-
+        
         if not nagumo_final:
             st.warning("Nenhum produto encontrado.")
-
+            
         for p in nagumo_final:
             imgs = p.get('photosUrl')
             img = imgs[0] if (isinstance(imgs, list) and imgs) else DEFAULT_IMAGE_URL
-
+            
             titulo = p['name']
             texto_completo = p['name'] + " " + p.get('description', '')
-
+            
             if contem_papel_toalha(texto_completo):
                 _, _, _, texto_exibicao = extrair_info_papel_toalha(p['name'], p.get('description', ''))
                 if texto_exibicao: titulo += f" <span class='info-cinza'>({texto_exibicao})</span>"
-
+                
             if "papel higi" in remover_acentos(titulo.lower()):
                 titulo = re.sub(r"(folha simples)", r"<span style='color:red; font-weight:bold;'>\1</span>", titulo, flags=re.IGNORECASE)
                 titulo = re.sub(r"(folha dupla|folha tripla)", r"<span style='color:green; font-weight:bold;'>\1</span>", titulo, flags=re.IGNORECASE)
 
             preco_normal = p['preco_normal']
             preco_final = p['preco_final']
-            if preco_final and preco_normal and preco_final < preco_normal:
-                desconto = ((preco_normal - preco_final) / preco_normal) * 100
-                preco_html = f"<span style='font-weight:bold;font-size:1rem;'>R$ {preco_final:.2f}</span> <span style='color:red;font-weight:bold;'>({desconto:.0f}% OFF)</span><br><span style='text-decoration:line-through;color:gray;'>R$ {preco_normal:.2f}</span>"
+            if preco_final < preco_normal:
+                desconto_percentual = ((preco_normal - preco_final) / preco_normal) * 100
+                preco_html = f"<span style='font-weight: bold; font-size: 1rem;'>R$ {preco_final:.2f}</span> <span style='color: red; font-weight: bold;'> ({desconto_percentual:.0f}% OFF)</span><br><span style='text-decoration: line-through; color: gray;'>R$ {preco_normal:.2f}</span>"
             else:
-                preco_html = f"<span style='font-weight:bold;font-size:1rem;'>R$ {preco_normal:.2f}</span>" if preco_normal else "<span style='color:gray;'>Preco indisponivel</span>"
+                preco_html = f"<span style='font-weight: bold; font-size: 1rem;'>R$ {preco_normal:.2f}</span>"
 
             st.markdown(f"""
                 <div class='product-container'>
                     <a href='{p['url_final']}' target='_blank' class='product-image-box'>
-                        <img src="{img}" width="80" style="background-color:white;border-top-left-radius:6px;border-top-right-radius:6px;display:block;"/>
-                        <img src="{LOGO_NAGUMO_URL}" width="80" style="border-bottom-left-radius:6px;border-bottom-right-radius:6px;border:1.5px solid white;display:block;"/>
+                        <img src="{img}" width="80" style="background-color: white; border-top-left-radius: 6px; border-top-right-radius: 6px; display: block;"/>
+                        <img src="{LOGO_NAGUMO_URL}" width="80" style="border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; border: 1.5px solid white; display: block;"/>
                     </a>
                     <div class='product-info'>
-                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none;color:inherit;'><strong>{titulo}</strong></a><br>
+                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:inherit;'><strong>{titulo}</strong></a><br>
                         <strong>{preco_html}</strong><br>
-                        <div style="margin-top:4px;font-size:0.9em;color:#666;">{p['unit_label']}</div>
-                        <div style="color:gray;font-size:0.8em;">Estoque: {p.get('stock', 0)}</div>
+                        <div style="margin-top: 4px; font-size: 0.9em; color: #666;">{p['unit_label']}</div>
+                        <div style="color: gray; font-size: 0.8em;">Estoque: {p.get('stock', 0)}</div>
                     </div>
                 </div>
                 <hr class='product-separator' />
             """, unsafe_allow_html=True)
 
+    # Forçar rolagem ao topo
     components.html(
-        """
+        f"""
         <script>
             const cols = window.parent.document.querySelectorAll('[data-testid="stColumn"]');
             cols.forEach(col => col.scrollTop = 0);
