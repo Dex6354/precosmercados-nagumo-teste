@@ -3,28 +3,92 @@ import streamlit.components.v1 as components
 import requests
 import unicodedata
 import re
+import html as html_module
 
-# --- CONFIGURACOES E CONSTANTES ---
+# --- CONFIGURACOES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
+BASE_URL = "https://www.nagumo.com.br"
 
-# API Instaleap (mercearia, higiene, etc.)
 INSTALEAP_URL = "https://nextgentheadless.instaleap.io/api/v3"
-INSTALEAP_HEADERS = {
-    "Content-Type": "application/json",
-    "Origin": "https://www.nagumo.com.br",
-    "Referer": "https://www.nagumo.com.br/",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-}
 PRODUCT_FIELDS = "name price photosUrl sku stock description unit promotion { isActive conditions { price priceBeforeTaxes } }"
 
-# API Demandware/SFCC (hortifruti e outros produtos nao indexados pelo Instaleap)
-SFCC_SUGGESTIONS_URL = "https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/SearchServices-GetSuggestions"
-SFCC_HEADERS = {
+HEADERS_BROWSER = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Referer": "https://www.nagumo.com.br/",
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "X-Requested-With": "XMLHttpRequest"
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9",
+    "Referer": "https://www.nagumo.com.br/"
+}
+
+# Mapeamento: palavras-chave → categorias SFCC a buscar (mais especificas primeiro)
+# Gerado a partir do menu real do site
+CATEGORIA_MAP = {
+    # Hortifruti - frutas
+    "banana": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
+    "maca": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
+    "laranja": ["/categoria/departamentos/hortifruti/frutas/fruta-citrica/", "/categoria/departamentos/hortifruti/frutas/"],
+    "limao": ["/categoria/departamentos/hortifruti/frutas/fruta-citrica/", "/categoria/departamentos/hortifruti/frutas/"],
+    "morango": ["/categoria/departamentos/hortifruti/frutas/fruta-especial/", "/categoria/departamentos/hortifruti/frutas/"],
+    "uva": ["/categoria/departamentos/hortifruti/frutas/fruta-especial/", "/categoria/departamentos/hortifruti/frutas/"],
+    "manga": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
+    "mamao": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
+    "melao": ["/categoria/departamentos/hortifruti/frutas/fruta-hidratantes/", "/categoria/departamentos/hortifruti/frutas/"],
+    "melancia": ["/categoria/departamentos/hortifruti/frutas/fruta-hidratantes/", "/categoria/departamentos/hortifruti/frutas/"],
+    "abacaxi": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
+    "pera": ["/categoria/departamentos/hortifruti/frutas/fruta-especial/", "/categoria/departamentos/hortifruti/frutas/"],
+    "pessego": ["/categoria/departamentos/hortifruti/frutas/fruta-especial/", "/categoria/departamentos/hortifruti/frutas/"],
+    "abacate": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
+    "coco": ["/categoria/departamentos/hortifruti/frutas/fruta-tradicional/", "/categoria/departamentos/hortifruti/frutas/"],
+    # Hortifruti - legumes tuberculos
+    "cenoura": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
+    "batata": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
+    "beterraba": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
+    "inhame": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
+    "mandioca": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
+    "aipim": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
+    "macaxeira": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
+    "rabanete": ["/categoria/departamentos/hortifruti/legumes/tuberculos/"],
+    # Hortifruti - legumes caules e frutos
+    "tomate": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/", "/categoria/departamentos/hortifruti/legumes/"],
+    "abobrinha": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "pepino": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "pimentao": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "jiló": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "jilo": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "berinjela": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "chuchu": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "quiabo": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "milho": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "vagem": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "ervilha": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    "amendoim": ["/categoria/departamentos/hortifruti/legumes/caules-e-frutos/"],
+    # Hortifruti - bulbos
+    "cebola": ["/categoria/departamentos/hortifruti/legumes/bulbos/"],
+    "alho": ["/categoria/departamentos/hortifruti/legumes/bulbos/"],
+    # Hortifruti - verduras
+    "alface": ["/categoria/departamentos/hortifruti/verduras/"],
+    "couve": ["/categoria/departamentos/hortifruti/verduras/"],
+    "espinafre": ["/categoria/departamentos/hortifruti/verduras/"],
+    "rucula": ["/categoria/departamentos/hortifruti/verduras/"],
+    "agriao": ["/categoria/departamentos/hortifruti/verduras/"],
+    "repolho": ["/categoria/departamentos/hortifruti/verduras/"],
+    "brocolis": ["/categoria/departamentos/hortifruti/verduras/"],
+    "couve-flor": ["/categoria/departamentos/hortifruti/verduras/"],
+    "acelga": ["/categoria/departamentos/hortifruti/verduras/"],
+    # Hortifruti - ervas
+    "salsinha": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
+    "coentro": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
+    "manjericao": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
+    "cebolinha": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
+    "salsa": ["/categoria/departamentos/hortifruti/verduras/erva-e-condimento/"],
+    # Hortifruti - granjeiros
+    "ovo": ["/categoria/departamentos/hortifruti/granjeiros/ovos/"],
+    "ovos": ["/categoria/departamentos/hortifruti/granjeiros/ovos/"],
+    # Acougue
+    "frango": ["/categoria/departamentos/acougue/ave/ave-refrigerada/", "/categoria/departamentos/acougue/ave/"],
+    "picanha": ["/categoria/departamentos/acougue/bovino/bovino-manipulado/", "/categoria/departamentos/acougue/bovino/"],
+    "carne": ["/categoria/departamentos/acougue/bovino/", "/categoria/departamentos/acougue/"],
+    "peixe": ["/categoria/departamentos/peixaria/peixes/peixe-fresco/", "/categoria/departamentos/peixaria/peixes/"],
 }
 
 # --- FUNCOES UTILITARIAS ---
@@ -55,7 +119,7 @@ def produto_relevante(nome, descricao, palavras_chave):
         return True
     return all(k in texto for k in palavras_chave)
 
-# --- LOGICA DE CALCULO DE PRECO UNITARIO ---
+# --- CALCULO DE PRECO UNITARIO ---
 def contem_papel_toalha(texto):
     texto = remover_acentos(texto.lower())
     return "papel" in texto and "toalha" in texto
@@ -116,7 +180,7 @@ def extrair_valor_unitario(preco_unitario):
     if match: return float(match.group(1).replace(',', '.'))
     return float('inf')
 
-# --- FONTE 1: INSTALEAP (mercearia, higiene, etc.) ---
+# --- FONTE 1: INSTALEAP ---
 def buscar_instaleap(term):
     payload = {
         "operationName": "SearchProducts",
@@ -133,99 +197,108 @@ def buscar_instaleap(term):
         "query": f"query SearchProducts($searchProductsInput: SearchProductsInput!) {{ searchProducts(searchProductsInput: $searchProductsInput) {{ products {{ {PRODUCT_FIELDS} }} }} }}"
     }
     try:
-        r = requests.post(INSTALEAP_URL, headers=INSTALEAP_HEADERS, json=payload, timeout=10)
+        r = requests.post(INSTALEAP_URL, headers={"Content-Type": "application/json", "Origin": BASE_URL}, json=payload, timeout=10)
         return r.json().get('data', {}).get('searchProducts', {}).get('products', []) or []
     except:
         return []
 
-# --- FONTE 2: DEMANDWARE SFCC (hortifruti e outros nao indexados pelo Instaleap) ---
-def buscar_sfcc_suggestions(termo):
+# --- FONTE 2: SCRAPING DE CATEGORIA SFCC ---
+def extrair_produtos_do_html(html_content):
     """
-    Usa o endpoint de sugestoes de busca do Demandware/SFCC do Nagumo.
-    Este endpoint indexa hortifruti, acougue e outros departamentos que o
-    Instaleap nao retorna na busca textual.
-    Retorna lista normalizada no mesmo formato do Instaleap para unificacao.
+    Extrai produtos do HTML de uma pagina de categoria do Nagumo/SFCC.
+    Os dados vem como JSON embutido dentro de data attributes dos web components.
+    Formato: {"id":"13772","productName":"Cenoura","price":{"sales":{"value":11.98}},...}
     """
-    try:
-        r = requests.get(
-            SFCC_SUGGESTIONS_URL,
-            params={"q": termo},
-            headers=SFCC_HEADERS,
-            timeout=10
-        )
-        data = r.json()
-    except:
-        return []
-
+    decoded = html_module.unescape(html_content)
     produtos = []
-    # O endpoint retorna 'product' com lista de sugestoes de produto
-    product_suggestions = (data.get('product') or {}).get('products') or []
-    if not product_suggestions:
-        # Tentar estrutura alternativa
-        product_suggestions = data.get('products') or []
+    vistos = set()
 
-    for item in product_suggestions:
-        # Normalizar para o mesmo formato do Instaleap
-        sku = str(item.get('id') or item.get('productId') or '')
-        if not sku:
+    # Encontrar todos os blocos JSON de produto pelo padrao {"id":"NNNN","productName":
+    for match in re.finditer(r'\{"id":"(\d+)","productName":"([^"]+)"[^{]*"price":\{"sales":\{"value":([\d.]+)', decoded):
+        sku = match.group(1)
+        if sku in vistos:
             continue
+        vistos.add(sku)
 
-        nome = item.get('productName') or item.get('name') or ''
-        preco_raw = item.get('price') or {}
+        # Pegar o JSON completo a partir desse match
+        start = match.start()
+        chunk = decoded[start:start + 3000]
 
-        # Extrair preco: pode ser objeto {sales: {value: X}} ou numero direto
-        if isinstance(preco_raw, dict):
-            preco = (preco_raw.get('sales') or {}).get('value') or 0
-        else:
-            try:
-                preco = float(preco_raw)
-            except:
-                preco = 0
+        nome = match.group(2)
+        preco = float(match.group(3))
 
-        # Imagem: pode vir de varios campos
-        img_url = (
-            item.get('imageUrl') or
-            item.get('image') or
-            f"https://assetsmn.s3.us-east-1.amazonaws.com/assets/ofertas-ecommerce/{sku}.webp"
-        )
+        # Extrair URL do produto
+        url_match = re.search(r'"productShowFullUrl":"(https://www\.nagumo\.com\.br[^"]+)"', chunk)
+        url = url_match.group(1) if url_match else f"{BASE_URL}/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
 
-        # URL do produto
-        product_url = item.get('productShowFullUrl') or item.get('url') or ''
-        if not product_url:
-            product_url = f"https://www.nagumo.com.br/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
+        # Extrair imagem
+        img_match = re.search(r'"disUrl":"(https://assetsmn\.s3[^"]+)"', chunk)
+        img = img_match.group(1) if img_match else DEFAULT_IMAGE_URL
+
+        # Extrair estoque
+        ats_match = re.search(r'"ATSInGenerealStock":(\d+)', chunk)
+        estoque = int(ats_match.group(1)) if ats_match else 0
+
+        # Extrair peso medio (para calculo de preco/kg em hortifruti)
+        peso_match = re.search(r'"averageWeightDisplay":"([^"]+)"', chunk)
+        avg_weight = peso_match.group(1) if peso_match else ""
 
         produtos.append({
             'sku': sku,
             'name': nome,
             'price': preco,
-            'photosUrl': [img_url] if img_url else [],
-            'stock': item.get('ATSInGenerealStock') or item.get('stock') or 0,
-            'description': item.get('description') or '',
-            'unit': item.get('unit') or '',
+            'photosUrl': [img],
+            'stock': estoque,
+            'description': avg_weight,  # ex: "180g" — usado para calculo de preco unitario
+            'unit': '',
             'promotion': None,
-            '_url_final': product_url,   # URL real do SFCC (mais precisa)
+            '_url_final': url,
             '_fonte': 'sfcc'
         })
 
     return produtos
 
+def buscar_categoria_sfcc(url_categoria):
+    """Faz GET na pagina de categoria do SFCC e extrai produtos do HTML."""
+    try:
+        r = requests.get(BASE_URL + url_categoria, headers=HEADERS_BROWSER, timeout=15)
+        if r.status_code == 200:
+            return extrair_produtos_do_html(r.text)
+    except:
+        pass
+    return []
+
+def encontrar_categorias_para_termo(termo):
+    """Mapeia o termo para as URLs de categoria mais provaveis."""
+    s = remover_acentos(termo)
+    # Busca direta no mapa
+    if s in CATEGORIA_MAP:
+        return CATEGORIA_MAP[s]
+    # Busca parcial: termo contem uma das chaves
+    for chave, cats in CATEGORIA_MAP.items():
+        if chave in s or s in chave:
+            return cats
+    return []
+
+# --- BUSCA COMPLETA ---
 def buscar_tudo(termo):
-    """Combina Instaleap + SFCC Suggestions."""
     resultados = []
     termos = gerar_formas_variantes(termo)
 
-    # Fonte 1: Instaleap
+    # Fonte 1: Instaleap (mercearia, higiene, etc.)
     for t in termos:
         resultados.extend(buscar_instaleap(t))
 
-    # Fonte 2: SFCC Suggestions (hortifruti e outros)
-    for t in termos:
-        sfcc = buscar_sfcc_suggestions(t)
-        if sfcc:
-            resultados.extend(sfcc)
-            break  # uma variante que retornou ja basta
+    # Fonte 2: Scraping de categoria SFCC (hortifruti, acougue, etc.)
+    categorias = encontrar_categorias_para_termo(remover_acentos(termo))
+    cats_visitadas = set()
+    for cat_url in categorias:
+        if cat_url not in cats_visitadas:
+            cats_visitadas.add(cat_url)
+            sfcc_produtos = buscar_categoria_sfcc(cat_url)
+            resultados.extend(sfcc_produtos)
 
-    return resultados
+    return resultados, categorias
 
 # --- INTERFACE STREAMLIT ---
 st.set_page_config(page_title="Precos Nagumo", page_icon="🛒", layout="wide")
@@ -258,7 +331,7 @@ if termo:
     palavras_chave = remover_acentos(termo).split()
 
     with st.spinner("🔍 Buscando no Nagumo..."):
-        raw_nagumo = buscar_tudo(termo)
+        raw_nagumo, cats_buscadas = buscar_tudo(termo)
 
         vistos = set()
         nagumo_final = []
@@ -277,8 +350,7 @@ if termo:
             preco_normal = p.get('price', 0) or 0
             preco_final = cond[0].get('price') if (promo.get('isActive') and cond) else preco_normal
 
-            # URL: preferir a URL real do SFCC se disponivel
-            url_final = p.get('_url_final') or f"https://www.nagumo.com.br/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
+            url_final = p.get('_url_final') or f"{BASE_URL}/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
 
             label = calcular_preco_unitario(preco_final, desc, nome, p.get('unit'))
             p['url_final'] = url_final
@@ -292,7 +364,7 @@ if termo:
 
     # --- DEBUG ---
     with st.expander(f"🐛 Debug — {len(raw_nagumo)} brutos / {len(nagumo_final)} exibidos"):
-        st.write("**Termos buscados:**", gerar_formas_variantes(termo))
+        st.write("**Categorias SFCC buscadas:**", cats_buscadas if cats_buscadas else "nenhuma")
         for p in raw_nagumo:
             fonte = p.get('_fonte', 'instaleap')
             st.write(f"[{fonte}] SKU={p.get('sku')} | Nome='{p.get('name')}' | Preco={p.get('price')} | Estoque={p.get('stock')}")
@@ -328,22 +400,22 @@ if termo:
             preco_normal = p['preco_normal']
             preco_final = p['preco_final']
             if preco_final and preco_normal and preco_final < preco_normal:
-                desconto_percentual = ((preco_normal - preco_final) / preco_normal) * 100
-                preco_html = f"<span style='font-weight: bold; font-size: 1rem;'>R$ {preco_final:.2f}</span> <span style='color: red; font-weight: bold;'> ({desconto_percentual:.0f}% OFF)</span><br><span style='text-decoration: line-through; color: gray;'>R$ {preco_normal:.2f}</span>"
+                desconto = ((preco_normal - preco_final) / preco_normal) * 100
+                preco_html = f"<span style='font-weight:bold;font-size:1rem;'>R$ {preco_final:.2f}</span> <span style='color:red;font-weight:bold;'>({desconto:.0f}% OFF)</span><br><span style='text-decoration:line-through;color:gray;'>R$ {preco_normal:.2f}</span>"
             else:
-                preco_html = f"<span style='font-weight: bold; font-size: 1rem;'>R$ {preco_normal:.2f}</span>" if preco_normal else "<span style='color:gray;'>Preco indisponivel</span>"
+                preco_html = f"<span style='font-weight:bold;font-size:1rem;'>R$ {preco_normal:.2f}</span>" if preco_normal else "<span style='color:gray;'>Preco indisponivel</span>"
 
             st.markdown(f"""
                 <div class='product-container'>
                     <a href='{p['url_final']}' target='_blank' class='product-image-box'>
-                        <img src="{img}" width="80" style="background-color: white; border-top-left-radius: 6px; border-top-right-radius: 6px; display: block;"/>
-                        <img src="{LOGO_NAGUMO_URL}" width="80" style="border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; border: 1.5px solid white; display: block;"/>
+                        <img src="{img}" width="80" style="background-color:white;border-top-left-radius:6px;border-top-right-radius:6px;display:block;"/>
+                        <img src="{LOGO_NAGUMO_URL}" width="80" style="border-bottom-left-radius:6px;border-bottom-right-radius:6px;border:1.5px solid white;display:block;"/>
                     </a>
                     <div class='product-info'>
-                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:inherit;'><strong>{titulo}</strong></a><br>
+                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none;color:inherit;'><strong>{titulo}</strong></a><br>
                         <strong>{preco_html}</strong><br>
-                        <div style="margin-top: 4px; font-size: 0.9em; color: #666;">{p['unit_label']}</div>
-                        <div style="color: gray; font-size: 0.8em;">Estoque: {p.get('stock', 0)}</div>
+                        <div style="margin-top:4px;font-size:0.9em;color:#666;">{p['unit_label']}</div>
+                        <div style="color:gray;font-size:0.8em;">Estoque: {p.get('stock', 0)}</div>
                     </div>
                 </div>
                 <hr class='product-separator' />
