@@ -1,110 +1,114 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import requests
-import unicodedata
-import re
-import html
 import json
 import pandas as pd
+from urllib.parse import urlencode
+import time
 
-# --- CONFIGURAÇÕES E CONSTANTES ---
-LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
-DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
+st.set_page_config(page_title="Nagumo Cenoura Scraper", layout="wide")
+st.title("🥕 Nagumo Busca - Cenoura (e outros produtos)")
+st.markdown("**API correta identificada:** `Search-UpdateGrid`")
 
-# --- FUNÇÕES UTILITÁRIAS ---
-def remover_acentos(texto):
-    if not texto: return ""
-    return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
+# Sidebar controls
+st.sidebar.header("Configurações")
+query = st.sidebar.text_input("Termo de busca", value="cenoura")
+sz = st.sidebar.number_input("Itens por página", value=20, min_value=1, max_value=100)
+max_pages = st.sidebar.number_input("Máximo de páginas", value=5, min_value=1)
 
-# --- LÓGICA DE BUSCA NAGUMO (CORRIGIDA) ---
-def buscar_produtos_nagumo(termo_busca):
-    url = f"https://www.nagumo.com.br/busca?q={termo_busca}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
+if st.sidebar.button("Buscar Produtos"):
+    products = []
+    base_url = "https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid"
     
-    produtos_formatados = []
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code == 200:
-            # Extração via Regex do componente que contém o JSON de produtos
-            match = re.search(r'products="([^"]+)"', response.text)
-            if match:
-                json_raw = html.unescape(match.group(1))
-                dados_brutos = json.loads(json_raw)
-                
-                for p in dados_brutos:
-                    # Mapeamento para o seu layout atual
-                    img_data = p.get("images", {}).get("large", [{}])[0]
-                    img_url = img_data.get("url", DEFAULT_IMAGE_URL)
-                    
-                    # Garantir que a URL da imagem seja absoluta
-                    if img_url.startswith('/'):
-                        img_url = f"https://www.nagumo.com.br{img_url}"
-
-                    produtos_formatados.append({
-                        "id": p.get("id"),
-                        "productName": p.get("productName"),
-                        "price_formatted": p.get("price", {}).get("sales", {}).get("formatted", "R$ 0,00"),
-                        "price_value": p.get("price", {}).get("sales", {}).get("value", 0),
-                        "image": img_url,
-                        "brand": p.get("brand", "Nagumo"),
-                        "url_final": f"https://www.nagumo.com.br/p/{p.get('id')}", # URL aproximada
-                        "unit_label": "Unidade" # Campo padrão
-                    })
-    except Exception as e:
-        st.error(f"Erro na busca: {e}")
+    for page in range(max_pages):
+        params = {
+            "q": query,
+            "start": page * sz,
+            "sz": sz
+        }
         
-    return produtos_formatados
-
-# --- INTERFACE ---
-st.title("🥕 Nagumo Search - Layout Final")
-
-# CSS para manter o layout original
-st.markdown("""
-    <style>
-    .product-container { display: flex; align-items: center; padding: 10px; }
-    .product-image-box { margin-right: 15px; }
-    .product-info { font-family: sans-serif; }
-    .product-separator { border: 0; border-top: 1px solid #eee; margin: 10px 0; }
-    </style>
-""", unsafe_allow_html=True)
-
-query = st.text_input("Buscar no Nagumo:", placeholder="Ex: cenoura")
-
-if query:
-    with st.spinner("Buscando..."):
-        resultados = buscar_produtos_nagumo(query)
-
-    if resultados:
-        for p in resultados:
-            titulo = p['productName']
-            preco_str = p['price_formatted']
-            img = p['image']
-
-            st.markdown(f"""
-                <div class='product-container'>
-                    <a href='{p['url_final']}' target='_blank' class='product-image-box'>
-                        <img src="{img}" width="80" style="background-color: white; border-radius: 6px; display: block;"/>
-                    </a>
-                    <div class='product-info'>
-                        <div style="font-size: 0.8em; color: gray;">{p['brand']}</div>
-                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:inherit;'>
-                            <strong>{titulo}</strong>
-                        </a><br>
-                        <span style='color: #2e7d32; font-weight: bold; font-size: 1.1rem;'>{preco_str}</span><br>
-                        <div style="margin-top: 4px; font-size: 0.8em; color: #666;">ID: {p['id']}</div>
-                    </div>
-                </div>
-                <hr class='product-separator' />
-            """, unsafe_allow_html=True)
+        url = f"{base_url}?{urlencode(params)}"
+        st.info(f"Buscando página {page+1} → {url}")
+        
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml",
+                "Referer": f"https://www.nagumo.com.br/busca?q={query}"
+            }
+            
+            resp = requests.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            
+            # The response is HTML fragment with <search-card-grid> containing JSON data
+            text = resp.text
+            
+            # Extract product JSON (it's embedded in data attributes or script)
+            import re
+            # Look for product data in JSON format inside the HTML
+            json_matches = re.findall(r'(\[\s*\{[^}]+"productId"[^}]+\}\s*(?:,\s*\{[^}]*\})*\s*\])', text)
+            
+            found = False
+            for match in json_matches:
+                try:
+                    data = json.loads(match)
+                    if isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, dict) and "productId" in item:
+                                products.append({
+                                    "ID": item.get("productId"),
+                                    "Nome": item.get("productName", item.get("title")),
+                                    "Preço": item.get("price", {}).get("sales", {}).get("formatted", "N/A"),
+                                    "Preço Num": item.get("price", {}).get("sales", {}).get("value"),
+                                    "URL": item.get("productShowFullUrl") or f"https://www.nagumo.com.br{item.get('url', '')}",
+                                    "Imagem": item.get("image", {}).get("url") or item.get("image", [{}])[0].get("url"),
+                                    "Disponível": item.get("ATSInCurrentStore", 0) > 0
+                                })
+                        found = True
+                except:
+                    continue
+            
+            if not found:
+                # Fallback: try to find any JSON with products
+                json_blocks = re.findall(r'\{[^{}]*(?:"productId"|"productName"|"price")[^{}]*\}', text)
+                for block in json_blocks:
+                    try:
+                        item = json.loads(block + "}")
+                        if "productId" in item or "productName" in item:
+                            products.append({
+                                "ID": item.get("productId"),
+                                "Nome": item.get("productName") or item.get("title"),
+                                "Preço": item.get("price", {}).get("sales", {}).get("formatted", "N/A"),
+                                "Preço Num": item.get("price", {}).get("sales", {}).get("value"),
+                                "URL": item.get("productShowFullUrl")
+                            })
+                    except:
+                        pass
+            
+            st.success(f"Página {page+1}: {len(products) - (len(products)-len([p for p in products if 'page' not in locals()]))} itens")
+            
+            time.sleep(1)  # Be respectful
+            
+        except Exception as e:
+            st.error(f"Erro na página {page+1}: {e}")
+            break
+    
+    if products:
+        df = pd.DataFrame(products)
+        st.success(f"**Total de {len(df)} produtos encontrados**")
+        
+        # Display
+        st.dataframe(df, use_container_width=True)
+        
+        # Download
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Baixar CSV", csv, f"nagumo_{query}.csv", "text/csv")
+        
+        # Simple stats
+        st.subheader("Estatísticas")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Preço médio", f"R$ {df['Preço Num'].mean():.2f}" if not df['Preço Num'].isna().all() else "N/A")
+        with col2:
+            st.metric("Itens em estoque", df["Disponível"].sum())
     else:
         st.warning("Nenhum produto encontrado.")
-
-# Footer/Debugger Sidebar
-with st.sidebar:
-    st.header("Status")
-    if query:
-        st.write(f"Termo: {query}")
-        st.write(f"Resultados: {len(resultados) if 'resultados' in locals() else 0}")
