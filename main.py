@@ -1,102 +1,85 @@
 import streamlit as st
-import json
+import requests
 import re
 import html
+import json
 import pandas as pd
 
 # Configuração da página
-st.set_page_config(page_title="Nagumo Scraper Debugger", layout="wide")
+st.set_page_config(page_title="Nagumo Search", page_icon="🥕")
 
-def extract_products_from_har(har_data):
+def buscar_produtos_nagumo(termo_busca):
     """
-    Localiza a entrada de busca no HAR e extrai os produtos do 
-    componente <search-card-grid> injetado no HTML.
+    Faz o scraping em tempo real da página de busca do Nagumo.
     """
+    url = f"https://www.nagumo.com.br/busca?q={termo_busca}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "pt-BR,pt;q=0.9"
+    }
+    
     logs = []
-    products_found = []
+    products_list = []
     
-    entries = har_data.get('log', {}).get('entries', [])
-    logs.append(f"Total de entradas encontradas no HAR: {len(entries)}")
-    
-    # Busca a entrada específica da URL de busca
-    search_entry = None
-    for entry in entries:
-        url = entry.get('request', {}).get('url', '')
-        if "busca?q=cenoura" in url and entry.get('response', {}).get('status') == 200:
-            search_entry = entry
-            logs.append(f"Entrada de busca identificada: {url}")
-            break
-            
-    if not search_entry:
-        logs.append("ERRO: Nenhuma entrada de busca encontrada no arquivo.")
-        return [], logs
-
-    # Extrai o HTML da resposta
-    content = search_entry.get('response', {}).get('content', {}).get('text', '')
-    if not content:
-        logs.append("ERRO: O conteúdo da resposta está vazio.")
-        return [], logs
-
-    # Regex para capturar o JSON dentro do atributo 'products' do componente search-card-grid
-    # Padrão: products="[{...}]"
-    match = re.search(r'products="([^"]+)"', content)
-    
-    if match:
-        logs.append("Componente <search-card-grid> localizado.")
-        # O conteúdo do atributo está com entidades HTML (ex: &quot;)
-        json_raw = html.unescape(match.group(1))
-        
-        try:
-            raw_products = json.loads(json_raw)
-            logs.append(f"JSON decodificado com sucesso. {len(raw_products)} itens brutos.")
-            
-            for p in raw_products:
-                products_found.append({
-                    "ID": p.get("id"),
-                    "Nome": p.get("productName"),
-                    "Preço": p.get("price", {}).get("sales", {}).get("formatted", "N/A"),
-                    "Marca": p.get("brand"),
-                    "Disponível": "Sim" if p.get("available") else "Não"
-                })
-        except Exception as e:
-            logs.append(f"ERRO ao processar JSON: {str(e)}")
-    else:
-        logs.append("ERRO: Atributo 'products' não encontrado no HTML.")
-
-    return products_found, logs
-
-# Interface Streamlit
-st.title("🥕 Nagumo HAR Search Extractor")
-st.markdown("Extraia itens e preços diretamente do arquivo `.har` da busca.")
-
-uploaded_file = st.file_uploader("Arraste o arquivo buscacenoura.har aqui", type=["har"])
-
-if uploaded_file is not None:
     try:
-        har_json = json.load(uploaded_file)
+        response = requests.get(url, headers=headers, timeout=10)
+        logs.append(f"Status Code: {response.status_code}")
         
-        # Execução da extração
-        items, debug_logs = extract_products_from_har(har_json)
-        
-        # Seção de Debugger
-        with st.expander("🐞 Debugger / Logs do Sistema", expanded=False):
-            for log in debug_logs:
-                st.code(log)
-        
-        if items:
-            st.success(f"Foram encontrados {len(items)} produtos.")
+        if response.status_code == 200:
+            # Localiza o componente <search-card-grid> que contém o atributo products="..."
+            content = response.text
+            match = re.search(r'products="([^"]+)"', content)
             
-            # Exibição em tabela
-            df = pd.DataFrame(items)
-            st.dataframe(df, use_container_width=True)
-            
-            # Botão para baixar CSV
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("Baixar Dados (CSV)", csv, "produtos_nagumo.csv", "text/csv")
+            if match:
+                # Decodifica as entidades HTML (&quot;) e carrega o JSON
+                json_raw = html.unescape(match.group(1))
+                data = json.loads(json_raw)
+                
+                for p in data:
+                    products_list.append({
+                        "Nome": p.get("productName"),
+                        "Preço": p.get("price", {}).get("sales", {}).get("formatted", "N/A"),
+                        "Marca": p.get("brand"),
+                        "ID": p.get("id")
+                    })
+                logs.append(f"Sucesso: {len(products_list)} itens encontrados.")
+            else:
+                logs.append("Aviso: Estrutura de produtos não encontrada na página.")
         else:
-            st.warning("Nenhum dado pôde ser extraído. Verifique o Debugger acima.")
+            logs.append(f"Erro na requisição: {response.status_code}")
             
     except Exception as e:
-        st.error(f"Falha ao ler o arquivo: {e}")
+        logs.append(f"Erro de conexão: {str(e)}")
+        
+    return products_list, logs
+
+# --- Interface Streamlit ---
+st.title("🥕 Nagumo Real-Time Search")
+
+# Campo de busca
+query = st.text_input("O que você deseja buscar no Nagumo?", placeholder="Ex: cenoura, leite, arroz...")
+
+if query:
+    with st.spinner(f"Buscando '{query}' no Nagumo..."):
+        resultados, debug_info = buscar_produtos_nagumo(query)
+    
+    # Debugger lateral ou expansível
+    with st.sidebar:
+        st.header("🐞 Debugger")
+        for log in debug_info:
+            st.write(f"- {log}")
+
+    if resultados:
+        st.success(f"Resultados para: {query}")
+        
+        # Exibe em tabela
+        df = pd.DataFrame(resultados)
+        st.dataframe(df, use_container_width=True)
+        
+        # Download
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("Baixar Resultados (CSV)", csv, f"busca_{query}.csv", "text/csv")
+    else:
+        st.error("Nenhum item encontrado ou houve um erro na extração.")
 else:
-    st.info("Aguardando upload do arquivo HAR.")
+    st.info("Digite um termo acima para iniciar a busca.")
