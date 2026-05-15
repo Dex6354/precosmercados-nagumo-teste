@@ -1,159 +1,237 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
-from bs4 import BeautifulSoup
 import unicodedata
 import re
-import json
+import time
 
 # --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-}
 
 # --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
     if not texto: return ""
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
 
-def extrair_preco(texto):
-    if not texto: return 0.0
-    # Limpa espaços e quebras de linha antes de aplicar o regex
-    texto_limpo = texto.replace('\n', ' ').strip()
-    match = re.search(r'R\$\s?(\d+,\d{2})', texto_limpo)
-    if match:
-        return float(match.group(1).replace(',', '.'))
-    return 0.0
+def gerar_formas_variantes(termo):
+    variantes = {termo}
+    if termo.endswith("s"): 
+        variantes.add(termo[:-1])
+    else: 
+        variantes.add(termo + "s")
+    # Variantes comuns para hortifruti
+    if termo in ["cenoura", "banana", "maçã", "laranja"]:
+        variantes.add(termo + "s")
+        variantes.add(termo)
+    return list(variantes)
 
-# --- SCRAPER NAGUMO (LÓGICA DO DEBUGGER) ---
-def scrape_nagumo_item(url):
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        if response.status_code != 200:
-            return None
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # 1. Tentar extração via componente JSON (Mais preciso para estoque e preços sem promo)
-        product_data_element = soup.find('product-detail-quantity')
-        if product_data_element and product_data_element.has_attr(':product'):
-            data = json.loads(product_data_element[':product'])
-            
-            nome = data.get('productName', 'Produto')
-            # Lógica de preço: flagtypes (promoção meunagumo) > sales > list
-            preco = data.get('price', {}).get('sales', {}).get('value', 0.0)
-            if data.get('flagtypes'):
-                 preco = data['flagtypes'][0].get('valueFlag', preco)
-            
-            img = data.get('images', {}).get('large', [{}])[0].get('src', {}).get('disUrl', DEFAULT_IMAGE_URL)
-            estoque = data.get('ATSInGenerealStock', 0)
-            unit = data.get('averageWeightDisplay', 'Unidade')
-            
-            return {
-                "titulo": nome,
-                "preco": float(preco),
-                "img": img,
-                "url_final": url,
-                "unit_label": unit,
-                "stock": estoque
+def slugify(text):
+    text = remover_acentos(text)
+    text = re.sub(r'[^a-z0-9\s-]', '', text).strip()
+    text = re.sub(r'[-\s]+', '-', text)
+    return text
+
+# --- LÓGICA DE CÁLCULO NAGUMO (mantida) ---
+def contem_papel_toalha(texto):
+    texto = remover_acentos(texto.lower())
+    return "papel" in texto and "toalha" in texto
+
+def extrair_info_papel_toalha(nome, descricao):
+    texto_nome = remover_acentos(nome.lower())
+    texto_completo = f"{texto_nome} {remover_acentos(descricao.lower())}"
+
+    for texto in [texto_nome, texto_completo]:
+        match = re.search(r'(\d+)\s*(un|unidades?|rolos?)\s*.*?(\d+)\s*(folhas|toalhas)', texto)
+        if match:
+            rolos, folhas_por_rolo = int(match.group(1)), int(match.group(3))
+            return rolos, folhas_por_rolo, rolos * folhas_por_rolo, f"{rolos} {match.group(2)}, {folhas_por_rolo} {match.group(4)}"
+        match = re.search(r'(\d+)\s*(folhas|toalhas)', texto)
+        if match: return None, None, int(match.group(1)), f"{match.group(1)} {match.group(2)}"
+    
+    m_un = re.search(r"(\d+)\s*(un|unidades?)", texto_completo)
+    if m_un: return None, None, int(m_un.group(1)), f"{m_un.group(1)} unidades"
+    return None, None, None, None
+
+def calcular_preco_unitario_nagumo(preco_valor, descricao, nome, unidade_api=None):
+    texto_completo = f"{nome} {descricao}".lower()
+    if contem_papel_toalha(texto_completo):
+        rolos, folhas, total_folhas, txt = extrair_info_papel_toalha(nome, descricao)
+        if total_folhas and total_folhas > 0: return f"R$ {preco_valor / total_folhas:.3f}/folha"
+        return "Preço por folha: n/d"
+
+    # ... (mantido o resto da função original - papel higiênico, gramatura, etc.)
+    fontes = [descricao.lower(), nome.lower()]
+    for fonte in fontes:
+        match_g = re.search(r"(\d+[.,]?\d*)\s*(g|gramas?)", fonte)
+        if match_g and float(match_g.group(1).replace(',', '.')) > 0: 
+            return f"R$ {preco_valor / (float(match_g.group(1).replace(',', '.')) / 1000):.2f}/kg"
+        match_kg = re.search(r"(\d+[.,]?\d*)\s*(kg|quilo)", fonte)
+        if match_kg and float(match_kg.group(1).replace(',', '.')) > 0: 
+            return f"R$ {preco_valor / float(match_kg.group(1).replace(',', '.')):.2f}/kg"
+        match_ml = re.search(r"(\d+[.,]?\d*)\s*(ml|mililitros?)", fonte)
+        if match_ml and float(match_ml.group(1).replace(',', '.')) > 0: 
+            return f"R$ {preco_valor / (float(match_ml.group(1).replace(',', '.')) / 1000):.2f}/L"
+        match_l = re.search(r"(\d+[.,]?\d*)\s*(l|litros?)", fonte)
+        if match_l and float(match_l.group(1).replace(',', '.')) > 0: 
+            return f"R$ {preco_valor / float(match_l.group(1).replace(',', '.')):.2f}/L"
+        match_un = re.search(r"(\d+[.,]?\d*)\s*(un|unidades?)", fonte)
+        if match_un and float(match_un.group(1).replace(',', '.')) > 0: 
+            return f"R$ {preco_valor / float(match_un.group(1).replace(',', '.')):.2f}/un"
+
+    if unidade_api:
+        u = unidade_api.lower()
+        if u == 'kg': return f"R$ {preco_valor:.2f}/kg"
+        elif u == 'g': return f"R$ {preco_valor * 1000:.2f}/kg"
+        elif u == 'l': return f"R$ {preco_valor:.2f}/L"
+        elif u == 'ml': return f"R$ {preco_valor * 1000:.2f}/L"
+        elif u == 'un': return f"R$ {preco_valor:.2f}/un"
+    return "Sem unidade"
+
+def extrair_valor_unitario(preco_unitario):
+    match = re.search(r"R\$ (\d+[.,]?\d*)", preco_unitario)
+    if match: return float(match.group(1).replace(',', '.'))
+    return float('inf')
+
+# --- REQUISIÇÃO NAGUMO (melhorada) ---
+def buscar_nagumo(term):
+    url = "https://nextgentheadless.instaleap.io/api/v3"
+    headers = {
+        "Content-Type": "application/json",
+        "Origin": "https://www.nagumo.com.br",
+        "Referer": "https://www.nagumo.com.br/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
+    payload = {
+        "operationName": "SearchProducts",
+        "variables": {
+            "searchProductsInput": {
+                "clientId": "NAGUMO", 
+                "storeReference": "22", 
+                "currentPage": 1, 
+                "pageSize": 60,   # aumentado
+                "search": [{"query": term}], 
+                "filters": {}
             }
-        
-        # 2. Fallback via seletores HTML tradicionais (Para links de busca/listagem)
-        nome_tag = soup.find('h1', class_='product-name') or soup.find('div', class_='product-name')
-        nome = nome_tag.text.strip() if nome_tag else "Produto"
-        
-        # Busca classes de preço variadas encontradas no HAR
-        preco_tag = soup.find('span', class_='productNotice-finalPrice') or \
-                    soup.find('span', class_='productPrice__price') or \
-                    soup.find('span', class_='sales')
-        
-        preco = extrair_preco(preco_tag.text) if preco_tag else 0.0
-        
-        img_tag = soup.find('img', class_='productDetails__images__principal__img') or \
-                  soup.find('img', class_='tile-image')
-        img = img_tag['src'] if img_tag and img_tag.has_attr('src') else DEFAULT_IMAGE_URL
-        
-        return {
-            "titulo": nome,
-            "preco": preco,
-            "img": img,
-            "url_final": url,
-            "unit_label": "Unidade",
-            "stock": "Disponível"
-        }
-    except Exception:
-        return None
+        },
+        "query": "query SearchProducts($searchProductsInput: SearchProductsInput!) { searchProducts(searchProductsInput: $searchProductsInput) { products { name price photosUrl sku stock description unit promotion { isActive conditions { price priceBeforeTaxes } } } } }"
+    }
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=12)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        return data.get('data', {}).get('searchProducts', {}).get('products', []) or []
+    except:
+        return []
 
-# --- INTERFACE STREAMLIT (LAYOUT ANTIGO) ---
-st.set_page_config(page_title="Monitor de Preços", layout="wide")
+# --- INTERFACE STREAMLIT ---
+st.set_page_config(page_title="Preços Nagumo", page_icon="🛒", layout="wide")
 
-# Estilo CSS original do seu site
 st.markdown("""
-<style>
-    .product-container {
-        display: flex;
-        align-items: center;
-        background-color: #f8f9fa;
-        padding: 10px;
-        border-radius: 8px;
-        border: 1px solid #e0e0e0;
-        margin-bottom: 10px;
-    }
-    .product-image-box {
-        margin-right: 15px;
-        flex-shrink: 0;
-    }
-    .product-info {
-        flex-grow: 1;
-    }
-    .product-title {
-        font-size: 14px;
-        font-weight: 600;
-        color: #333;
-        margin-bottom: 5px;
-        text-decoration: none;
-    }
-    .product-price {
-        font-size: 18px;
-        font-weight: 700;
-        color: #d50037;
-    }
-    .stock-info {
-        font-size: 11px;
-        color: #777;
-    }
-</style>
+    <style>
+        .block-container { padding-top: 0rem; }
+        footer {visibility: hidden;}
+        #MainMenu {visibility: hidden;}
+        div, span, strong, small { font-size: 0.8rem !important; }
+        img { max-width: 100px; height: auto; }
+        .product-container { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 0.8rem; flex-wrap: wrap; }
+        .product-image-box { flex: 0 0 auto; text-decoration:none; }
+        .product-info { flex: 1; word-break: break-word; overflow-wrap: anywhere; }
+        hr.product-separator { border: none; border-top: 1px solid #eee; margin: 12px 0; }
+        .info-cinza { color: gray; font-size: 0.8rem; }
+        [data-testid="stColumn"] { overflow-y: auto; max-height: 90vh; padding: 10px; border: 1px solid #f0f2f6; border-radius: 8px; background: transparent; }
+        header[data-testid="stHeader"] { display: none; }
+    </style>
 """, unsafe_allow_html=True)
 
-st.title("🔍 Busca de Itens Nagumo")
+st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
+termo = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
 
-# Campo de busca ou Lista de URLs (Simulando o comportamento do seu site)
-urls_to_check = [
-    "https://www.nagumo.com.br/categoria/departamentos/hortifruti/frutas/fruta-tradicional/banana-nanica-2004.html",
-    "https://www.nagumo.com.br/categoria/departamentos/hortifruti/legumes/tuberculos/cenoura-13772.html",
-    "https://www.nagumo.com.br/categoria/departamentos/hortifruti/legumes/caules-e-frutos/tomate-italiano-kg-2022.html"
-]
+if termo:
+    termos_busca = gerar_formas_variantes(remover_acentos(termo))
+    palavras_chave = remover_acentos(termo).split()
 
-if st.button("Buscar/Atualizar Itens"):
-    for url in urls_to_check:
-        item = scrape_nagumo_item(url)
-        if item:
-            # Layout antigo solicitado
+    with st.spinner("🔍 Buscando no Nagumo..."):
+        raw_nagumo = []
+        for t in termos_busca:
+            raw_nagumo.extend(buscar_nagumo(t))
+            time.sleep(0.3)  # evitar rate limit
+        
+        vistos_nagumo = set()
+        nagumo_final = []
+        for p in raw_nagumo:
+            sku = p.get('sku')
+            if sku and sku not in vistos_nagumo:
+                vistos_nagumo.add(sku)
+                nome = p.get('name', '')
+                desc = p.get('description', '') or ''
+                texto_completo = remover_acentos(f"{nome} {desc}")
+                
+                # Filtro mais flexível (any em vez de all para termos compostos)
+                if any(k in texto_completo for k in palavras_chave):
+                    promo = p.get('promotion') or {}
+                    cond = promo.get('conditions') or []
+                    preco_normal = p.get('price', 0) or 0
+                    preco_final = cond[0].get('price') if (promo.get('isActive') and cond) else preco_normal
+                    
+                    p['url_final'] = f"https://www.nagumo.com.br/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
+                    label = calcular_preco_unitario_nagumo(preco_final, desc, nome, p.get('unit'))
+                    p['unit_label'] = label
+                    p['sort_val'] = extrair_valor_unitario(label)
+                    p['preco_final'] = preco_final
+                    p['preco_normal'] = preco_normal
+                    nagumo_final.append(p)
+        
+        nagumo_final = sorted(nagumo_final, key=lambda x: x.get('sort_val') or 999)
+
+    # Interface
+    _, col_center, _ = st.columns([1, 2, 1])
+    with col_center:
+        st.markdown(f"""
+            <h5 style="display: flex; align-items: center; justify-content: center;">
+                <img src="{LOGO_NAGUMO_URL}" width="110" alt="Nagumo" style="border-radius: 6px; border: 1.5px solid white; padding: 2px;"/>
+            </h5>
+        """, unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} produto(s) encontrado(s) para '{termo}'</small></p>", unsafe_allow_html=True)
+        
+        if not nagumo_final:
+            st.warning("Nenhum produto encontrado. Tente outro termo.")
+            
+        for p in nagumo_final:
+            imgs = p.get('photosUrl')
+            img = imgs[0] if (isinstance(imgs, list) and imgs) else DEFAULT_IMAGE_URL
+            
+            titulo = p['name']
+            texto_completo = p['name'] + " " + p.get('description', '')
+            
+            if contem_papel_toalha(texto_completo):
+                _, _, _, texto_exibicao = extrair_info_papel_toalha(p['name'], p.get('description', ''))
+                if texto_exibicao: titulo += f" <span class='info-cinza'>({texto_exibicao})</span>"
+            
+            preco_normal = p['preco_normal']
+            preco_final = p['preco_final']
+            if preco_final < preco_normal:
+                desconto = ((preco_normal - preco_final) / preco_normal) * 100
+                preco_html = f"<span style='font-weight: bold; font-size: 1.1rem;'>R$ {preco_final:.2f}</span> <span style='color: red; font-weight: bold;'> ({desconto:.0f}% OFF)</span><br><span style='text-decoration: line-through; color: gray;'>R$ {preco_normal:.2f}</span>"
+            else:
+                preco_html = f"<span style='font-weight: bold; font-size: 1.1rem;'>R$ {preco_normal:.2f}</span>"
+
             st.markdown(f"""
-                <div class="product-container">
-                    <div class="product-image-box">
-                        <a href="{item['url_final']}" target="_blank">
-                            <img src="{item['img']}" width="80" style="border-radius: 4px;">
-                        </a>
-                    </div>
-                    <div class="product-info">
-                        <a href="{item['url_final']}" target="_blank" class="product-title">{item['titulo']}</a><br>
-                        <span class="product-price">R$ {item['preco']:.2f}</span><br>
-                        <span class="stock-info">{item['unit_label']} | Estoque: {item['stock']}</span>
+                <div class='product-container'>
+                    <a href='{p['url_final']}' target='_blank' class='product-image-box'>
+                        <img src="{img}" width="85" style="background-color: white; border-top-left-radius: 8px; border-top-right-radius: 8px;"/>
+                        <img src="{LOGO_NAGUMO_URL}" width="85" style="border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; border: 1.5px solid white;"/>
+                    </a>
+                    <div class='product-info'>
+                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:inherit;'><strong>{titulo}</strong></a><br>
+                        <strong>{preco_html}</strong><br>
+                        <div style="margin-top: 4px; font-size: 0.9em; color: #666;">{p['unit_label']}</div>
+                        <div style="color: gray; font-size: 0.8em;">Estoque: {p.get('stock', 'N/A')}</div>
                     </div>
                 </div>
+                <hr class='product-separator' />
             """, unsafe_allow_html=True)
-        else:
-            st.error(f"Não foi possível carregar o item: {url.split('/')[-1]}")
+
+    components.html("""<script>window.parent.document.querySelectorAll('[data-testid="stColumn"]').forEach(c => c.scrollTop = 0);</script>""", height=0)
