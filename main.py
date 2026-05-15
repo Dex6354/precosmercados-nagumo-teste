@@ -4,7 +4,6 @@ import requests
 import unicodedata
 import re
 import json
-import html
 
 # --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
@@ -93,36 +92,29 @@ def extrair_valor_unitario(preco_unitario):
     if match: return float(match.group(1).replace(',', '.'))
     return float('inf')
 
-# --- NOVA LÓGICA DE EXTRAÇÃO VIA REGEX ---
+# --- EXTRAÇÃO VIA REGEX (HTML SCRAPING) ---
 def buscar_nagumo(term):
-    # Formata o termo para a URL de busca do Nagumo
-    term_encoded = requests.utils.quote(term)
-    url = f"https://www.nagumo.com.br/busca?q={term_encoded}"
-    
+    # A URL de busca pública do Nagumo
+    url = f"https://www.nagumo.com.br/busca?termo={term}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
     }
-    
     try:
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code != 200:
-            return []
+        r = requests.get(url, headers=headers, timeout=15)
+        r.raise_for_status()
         
         # Regex para capturar o conteúdo do atributo 'products' dentro da tag <search-card-grid>
-        # O JSON costuma estar escapado no HTML (entities)
-        pattern = r'<search-card-grid[^>]*\sproducts="([^"]*)"'
-        match = re.search(pattern, response.text)
+        # O Nagumo injeta um JSON escapado (entities HTML) dentro desse atributo
+        pattern = r'<search-card-grid[^>]*products="([^"]*)"'
+        match = re.search(pattern, r.text)
         
         if match:
-            json_data = html.unescape(match.group(1))
-            products = json.loads(json_data)
-            return products
-            
+            # O conteúdo costuma vir com entidades HTML como &quot;
+            json_str = match.group(1).replace('&quot;', '"')
+            return json.loads(json_str)
     except Exception as e:
-        st.error(f"Erro na extração: {e}")
-        return []
+        print(f"Erro na raspagem: {e}")
     return []
 
 # --- INTERFACE STREAMLIT ---
@@ -149,39 +141,35 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h6>🛒 Preços Nagumo (Regex Scraper)</h6>", unsafe_allow_html=True)
+st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
 termo = st.text_input("🔎 Digite o nome do produto:", "Banana").strip()
 
 if termo:
     termos_busca = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
 
-    with st.spinner("🔍 Extraindo dados do Nagumo..."):
+    with st.spinner("🔍 Buscando no Nagumo..."):
         raw_nagumo = []
+        # Fazemos a busca para cada variante (singular/plural)
         for t in termos_busca: 
             raw_nagumo.extend(buscar_nagumo(t))
         
         vistos_nagumo = set()
         nagumo_final = []
         for p in raw_nagumo:
-            # O JSON do componente pode ter chaves levemente diferentes do GraphQL
-            # Ajustando para garantir compatibilidade
-            sku = p.get('sku') or p.get('id')
+            sku = p.get('sku')
             if sku and sku not in vistos_nagumo:
                 vistos_nagumo.add(sku)
                 nome, desc = p.get('name', ''), p.get('description', '') or ''
                 
+                # Filtro rigoroso: todas as palavras digitadas devem estar no nome ou descrição
                 if all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
                     promo = p.get('promotion') or {}
                     cond = promo.get('conditions') or []
-                    preco_normal = float(p.get('price', 0))
+                    preco_normal = p.get('price', 0)
+                    preco_final = cond[0].get('price') if (promo.get('isActive') and cond) else preco_normal
                     
-                    # Verificação de preço promocional no JSON injetado
-                    preco_final = preco_normal
-                    if promo.get('isActive') and cond:
-                        preco_final = float(cond[0].get('price', preco_normal))
-                    
-                    p['url_final'] = f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}"
+                    p['url_final'] = f"https://www.nagumo.com.br/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
                     label = calcular_preco_unitario_nagumo(preco_final, desc, nome, p.get('unit'))
                     p['unit_label'] = label
                     p['sort_val'] = extrair_valor_unitario(label)
@@ -199,13 +187,13 @@ if termo:
                 <img src="{LOGO_NAGUMO_URL}" width="100" alt="Nagumo" style="border-radius: 6px; border: 1.5px solid white; padding: 0px;"/>
             </h5>
         """, unsafe_allow_html=True)
-        st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} produto(s) encontrado(s).</small></p>", unsafe_allow_html=True)
+        st.markdown(f<p align='center'><small>🔎 {len(nagumo_final)} produto(s) encontrado(s).</small></p>", unsafe_allow_html=True)
         
         if not nagumo_final:
             st.warning("Nenhum produto encontrado.")
             
         for p in nagumo_final:
-            imgs = p.get('photosUrl') or p.get('images', [])
+            imgs = p.get('photosUrl')
             img = imgs[0] if (isinstance(imgs, list) and imgs) else DEFAULT_IMAGE_URL
             
             titulo = p['name']
@@ -237,7 +225,7 @@ if termo:
                         <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:inherit;'><strong>{titulo}</strong></a><br>
                         <strong>{preco_html}</strong><br>
                         <div style="margin-top: 4px; font-size: 0.9em; color: #666;">{p['unit_label']}</div>
-                        <div style="color: gray; font-size: 0.8em;">Estoque: {p.get('stock', 'Consultar')}</div>
+                        <div style="color: gray; font-size: 0.8em;">Estoque: {p.get('stock', 0)}</div>
                     </div>
                 </div>
                 <hr class='product-separator' />
