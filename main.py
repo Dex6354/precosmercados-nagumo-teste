@@ -8,14 +8,6 @@ import re
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
 
-# Dados extraídos do seu arquivo .har
-ALGOLIA_URL = "https://v7m6p98id9-dsn.algolia.net/1/indexes/nagumo_production_products/query"
-ALGOLIA_HEADERS = {
-    "X-Algolia-API-Key": "94490f23032502013876e6255767b419", # Chave pública do Nagumo
-    "X-Algolia-Application-Id": "V7M6P98ID9",
-    "Content-Type": "application/json"
-}
-
 # --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
     if not texto: return ""
@@ -27,19 +19,29 @@ def slugify(text):
     text = re.sub(r'[-\s]+', '-', text)
     return text
 
-# --- BUSCA VIA ALGOLIA (API CORRETA) ---
-def buscar_nagumo_algolia(term):
-    """Realiza a busca utilizando o motor Algolia identificado no .har"""
-    # O payload precisa do filtro da loja (storeReference 22 foi o identificado no seu log)
-    payload = {
-        "params": f"query={term}&hitsPerPage=40&filters=storeReference:22 AND stock>0"
+# --- NOVA BUSCA (API INTERNA IDENTIFICADA NO .HAR) ---
+def buscar_nagumo_internal(term):
+    """Utiliza a API de vitrine que o site consome diretamente"""
+    # Endpoint de fallback quando o Algolia falha ou é ignorado pelo site
+    url = f"https://www.nagumo.com.br/api/v1/search"
+    params = {
+        "q": term,
+        "sort": "relevance",
+        "page": 1
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Origin": "https://www.nagumo.com.br",
+        "Referer": "https://www.nagumo.com.br/"
     }
     try:
-        r = requests.post(ALGOLIA_URL, headers=ALGOLIA_HEADERS, json=payload, timeout=10)
+        r = requests.get(url, params=params, headers=headers, timeout=10)
         data = r.json()
-        return data.get('hits', [])
+        # Retorna a lista de produtos da estrutura v1
+        return data.get('products', [])
     except Exception as e:
-        st.error(f"Erro na API Algolia: {e}")
+        st.error(f"Erro na conexão com a API Nagumo: {e}")
         return []
 
 # --- INTERFACE ---
@@ -48,47 +50,54 @@ st.set_page_config(page_title="Preços Nagumo", layout="wide")
 st.markdown("""<style>
     .block-container { padding-top: 1rem; }
     div, span, strong { font-size: 0.8rem !important; }
-    .product-container { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #eee; }
+    .product-container { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #eee; }
     .img-box { flex: 0 0 60px; }
     .price-tag { color: #2e7d32; font-weight: bold; font-size: 1.1rem !important; }
 </style>""", unsafe_allow_html=True)
 
-st.markdown("<h6>🛒 Buscador Nagumo (Algolia API)</h6>", unsafe_allow_html=True)
+st.markdown("<h6>🛒 Buscador Nagumo (Internal API)</h6>", unsafe_allow_html=True)
 termo = st.text_input("🔎 Digite o produto:", "Cenoura").strip()
 
 if termo:
-    with st.spinner("Buscando itens reais..."):
-        hits = buscar_nagumo_algolia(termo)
+    with st.spinner("Buscando itens..."):
+        produtos = buscar_nagumo_internal(termo)
         final_list = []
         
-        for h in hits:
-            nome = h.get('name', '')
-            # No Algolia, o preço costuma vir em 'price' ou dentro de 'promotion'
-            preco = h.get('price', 0)
-            sku = h.get('sku')
+        for p in produtos:
+            nome = p.get('productName', '')
+            sku = p.get('productId') or p.get('sku')
             
-            # Captura de imagem do Algolia
-            img = DEFAULT_IMAGE_URL
-            if h.get('photosUrl'):
-                img = h['photosUrl'][0]
+            # --- LÓGICA DE PREÇO (CRÍTICA PARA CENOURA) ---
+            # 1. Tenta pegar de flagtypes (comum em itens de hortifruti no Nagumo)
+            # 2. Tenta pegar de price -> sales -> value
+            preco = 0.0
+            if p.get('flagtypes'):
+                preco = p['flagtypes'][0].get('valueFlag', 0.0)
             
-            # Filtro básico de conferência
-            if remover_acentos(termo) in remover_acentos(nome):
-                url_final = f"https://www.nagumo.com.br/p/{slugify(nome)}-{sku}"
+            if preco == 0:
+                price_data = p.get('price', {})
+                if isinstance(price_data, dict):
+                    preco = price_data.get('sales', {}).get('value', 0.0)
+
+            if preco > 0:
+                # Captura de imagem
+                img = DEFAULT_IMAGE_URL
+                if p.get('images'):
+                    img = p['images'][0].get('src', {}).get('disUrl', DEFAULT_IMAGE_URL)
                 
                 final_list.append({
                     "nome": nome,
                     "preco": preco,
                     "img": img,
-                    "url": url_final,
-                    "unit": h.get('unit', 'un')
+                    "url": f"https://www.nagumo.com.br/p/{slugify(nome)}-{sku}",
+                    "unidade": p.get('averageWeightDisplay', 'un')
                 })
 
     # Exibição
     _, col_center, _ = st.columns([1, 2, 1])
     with col_center:
         if not final_list:
-            st.warning("Nenhum item encontrado nesta loja (Referência 22).")
+            st.warning("Nenhum item encontrado. Tente verificar a conexão ou o termo.")
         else:
             for p in final_list:
                 st.markdown(f"""
@@ -99,7 +108,7 @@ if termo:
                                 <strong>{p['nome']}</strong>
                             </a><br>
                             <span class="price-tag">R$ {p['preco']:.2f}</span>
-                            <span style="color: gray; margin-left: 10px;">({p['unit']})</span>
+                            <span style="color: gray; margin-left: 10px;">({p['unidade']})</span>
                         </div>
                     </div>
                 """, unsafe_allow_html=True)
