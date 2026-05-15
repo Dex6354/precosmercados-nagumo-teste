@@ -3,8 +3,6 @@ import streamlit.components.v1 as components
 import requests
 import unicodedata
 import re
-import json
-import html
 
 # --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
@@ -14,6 +12,12 @@ DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-im
 def remover_acentos(texto):
     if not texto: return ""
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
+
+def gerar_formas_variantes(termo):
+    variantes = {termo}
+    if termo.endswith("s"): variantes.add(termo[:-1])
+    else: variantes.add(termo + "s")
+    return list(variantes)
 
 def slugify(text):
     text = remover_acentos(text)
@@ -33,87 +37,59 @@ def extrair_info_papel_toalha(nome, descricao):
         match = re.search(r'(\d+)\s*(un|unidades?|rolos?)\s*.*?(\d+)\s*(folhas|toalhas)', texto)
         if match:
             rolos, folhas = int(match.group(1)), int(match.group(3))
-            return rolos, folhas, rolos * folhas, f"{rolos} {match.group(2)}, {folhas} {match.group(4)}"
+            return rolos, folhas, rolos * folhas, f"{rolos} rolos, {folhas} folhas"
     return None, None, None, None
 
-def calcular_preco_unitario_nagumo(preco_valor, descricao, nome):
-    if not preco_valor: return "Preço indisponível"
-    texto_completo = f"{nome} {descricao}".lower()
-    if contem_papel_toalha(texto_completo):
-        _, _, total_folhas, _ = extrair_info_papel_toalha(nome, descricao)
-        if total_folhas: return f"R$ {preco_valor / total_folhas:.3f}/folha"
+def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda):
+    texto = remover_acentos(nome.lower())
     
-    fontes = [descricao.lower(), nome.lower()]
-    for fonte in fontes:
-        m = re.search(r"(\d+[.,]?\d*)\s*(kg|l|g|ml|un)", fonte)
-        if m:
-            try:
-                val = float(m.group(1).replace(',', '.'))
-                uni = m.group(2)
-                if val <= 0: continue
-                if uni in ['kg', 'l']: return f"R$ {preco_valor / val:.2f}/{uni}"
-                if uni in ['g', 'ml']: return f"R$ {preco_valor / (val/1000):.2f}/{'kg' if uni=='g' else 'L'}"
-            except: continue
-    return "Sem unidade"
+    # Lógica para peso/volume no nome
+    match = re.search(r'(\d+[.,]?\d*)\s*(kg|g|l|ml|un)', texto)
+    if match:
+        valor = float(match.group(1).replace(',', '.'))
+        unid = match.group(2)
+        if valor > 0:
+            if unid == 'g': return f"R$ {preco_valor / (valor/1000):.2f}/kg"
+            if unid == 'kg': return f"R$ {preco_valor / valor:.2f}/kg"
+            if unid == 'ml': return f"R$ {preco_valor / (valor/1000):.2f}/L"
+            if unid == 'l': return f"R$ {preco_valor / valor:.2f}/L"
+            if unid == 'un': return f"R$ {preco_valor / valor:.2f}/un"
 
-def extrair_valor_unitario(preco_unitario):
-    match = re.search(r"R\$ (\d+[.,]?\d*)", preco_unitario)
+    if medida_venda == "unity": return f"R$ {preco_valor:.2f}/un"
+    return "---"
+
+def extrair_valor_unitario(label):
+    match = re.search(r"R\$ (\d+[.,]?\d*)", label)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-# --- REQUISIÇÃO PAGINADA ---
+# --- REQUISIÇÃO NAGUMO (NOVO ENDPOINT) ---
 def buscar_nagumo(term):
     all_products = []
-    start = 0
-    sz = 24  # O Nagumo geralmente usa 24 como padrão
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "X-Requested-With": "XMLHttpRequest"
-    }
-    
-    # Máximo de 5 páginas para evitar travamentos, ajuste se necessário
-    for _ in range(5):
-        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={requests.utils.quote(term)}&start={start}&sz={sz}"
+    # Busca as primeiras duas páginas (0 a 40 itens)
+    for start in [0, 20]:
+        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start}&sz=20"
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         try:
-            r = requests.get(url, headers=headers, timeout=15)
-            # Regex ajustada para capturar o atributo 'data-props' ou 'products' de forma mais flexível
-            match = re.search(r'products="([^"]+)"', r.text)
-            
-            if match:
-                decoded_json = html.unescape(match.group(1))
-                batch = json.loads(decoded_json)
-                
-                if not batch or len(batch) == 0:
-                    break
-                
-                all_products.extend(batch)
-                
-                # Se vier menos que o tamanho da página, chegamos ao fim
-                if len(batch) < sz:
-                    break
-                start += sz
-            else:
-                break
-        except Exception as e:
-            st.error(f"Erro na busca: {e}")
-            break
-            
+            r = requests.get(url, headers=headers, timeout=10)
+            data = r.json()
+            products = data.get('productsSearchResult', [])
+            if not products: break
+            all_products.extend(products)
+        except: break
     return all_products
 
-# --- INTERFACE ---
+# --- INTERFACE STREAMLIT ---
 st.set_page_config(page_title="Preços Nagumo", page_icon="🛒", layout="wide")
 
 st.markdown("""
     <style>
         .block-container { padding-top: 0rem; }
-        footer, #MainMenu, header { visibility: hidden; }
         div, span, strong, small { font-size: 0.75rem !important; }
-        .product-container { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 0rem; flex-wrap: wrap; }
-        .product-info { flex: 1; word-break: break-word; }
-        hr.product-separator { border: none; border-top: 1px solid #eee; margin: 10px 0; }
-        [data-testid="stColumn"] {
-            overflow-y: auto; max-height: 90vh; padding: 10px; border: 1px solid #f0f2f6; border-radius: 8px;
-            max-width: 600px; margin-left: auto; margin-right: auto;
-        }
+        .product-container { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+        .product-info { flex: 1; }
+        .price-tag { font-size: 1rem !important; font-weight: bold; }
+        .off-tag { color: red; font-weight: bold; }
+        header[data-testid="stHeader"] { display: none; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -121,74 +97,67 @@ st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
 termo = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
 
 if termo:
+    termos_busca = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
-    with st.spinner(f"🔍 Buscando '{termo}' em todas as páginas..."):
-        raw_data = buscar_nagumo(termo)
-        nagumo_final = []
-        vistos = set()
 
-        for p in raw_data:
-            sku = str(p.get('id') or p.get('sku') or '')
-            nome = p.get('productName') or p.get('name', '')
-            desc = p.get('description', '') or ''
-            
-            if sku and sku not in vistos and all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
-                vistos.add(sku)
-                
-                # Extração de preço
-                preco_obj = p.get('price', {})
-                if isinstance(preco_obj, dict):
-                    preco_final = preco_obj.get('sales', {}).get('value', 0)
-                else:
-                    try: preco_final = float(preco_obj or 0)
-                    except: preco_final = 0
-                
-                label = calcular_preco_unitario_nagumo(preco_final, desc, nome)
-                
-                p_processado = {
-                    'sku': sku,
-                    'display_name': nome,
-                    'preco_final': preco_final,
-                    'unit_label': label,
-                    'sort_val': extrair_valor_unitario(label),
-                    'url_final': f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}",
-                    'raw': p
-                }
-                nagumo_final.append(p_processado)
+    with st.spinner("🔍 Buscando no Nagumo..."):
+        raw_nagumo = []
+        for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t))
+        
+        vistos = set()
+        nagumo_final = []
+        for p in raw_nagumo:
+            pid = p.get('id')
+            if pid and pid not in vistos:
+                vistos.add(pid)
+                nome = p.get('productName', '')
+                if all(k in remover_acentos(nome) for k in palavras_chave):
+                    # Extração de Preços
+                    price_data = p.get('price', {}).get('sales', {})
+                    preco_final = float(price_data.get('value', 0))
+                    
+                    # Promoção "Meu Nagumo"
+                    preco_normal = preco_final
+                    flag = p.get('flagtypes', [])
+                    if flag and isinstance(flag, list):
+                        preco_final = flag[0].get('valueFlag', preco_final)
+
+                    label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
+                    
+                    p['calc_label'] = label
+                    p['sort_val'] = extrair_valor_unitario(label)
+                    p['preco_final'] = preco_final
+                    p['preco_normal'] = preco_normal
+                    p['img_url'] = p.get('images', {}).get('medium', [{}])[0].get('absURL', DEFAULT_IMAGE_URL)
+                    p['link'] = p.get('productShowFullUrl', '#')
+                    nagumo_final.append(p)
         
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
 
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/></p>", unsafe_allow_html=True)
-        st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} itens encontrados.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens encontrados.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
-            raw = p['raw']
-            img = DEFAULT_IMAGE_URL
-            
-            # Lógica robusta de imagem
-            items = raw.get('items', [])
-            if isinstance(items, list) and len(items) > 0:
-                imgs = items[0].get('images', [])
-                if imgs: img = imgs[0].get('imageUrl', img)
-            elif 'images' in raw and raw['images']:
-                first_img = raw['images'][0]
-                img = first_img.get('imageUrl', img) if isinstance(first_img, dict) else first_img
+            desconto_html = ""
+            if p['preco_final'] < p['preco_normal']:
+                desc = ((p['preco_normal'] - p['preco_final']) / p['preco_normal']) * 100
+                desconto_html = f"<span class='off-tag'>({desc:.0f}% OFF Meu Nagumo)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
 
             st.markdown(f"""
                 <div class='product-container'>
-                    <a href='{p['url_final']}' target='_blank' style='text-decoration:none;'>
-                        <img src="{img}" width="80" style="border-radius: 6px; border: 1px solid #eee; background: white;"/>
+                    <a href='{p['link']}' target='_blank'>
+                        <img src="{p['img_url']}" width="80" style="border-radius:8px; border:1px solid #eee;"/>
                     </a>
                     <div class='product-info'>
-                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['display_name']}</strong></a><br>
-                        <span style='font-weight: bold; font-size: 1rem !important;'>R$ {p['preco_final']:.2f}</span><br>
-                        <div style="color: #666;">{p['unit_label']}</div>
+                        <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['productName']}</strong></a><br>
+                        <span class='price-tag'>R$ {p['preco_final']:.2f}</span> {desconto_html}<br>
+                        <div style="color: #666;">{p['calc_label']}</div>
+                        <div style="color: gray; font-size: 0.7rem;">Marca: {p.get('brand', 'N/A')}</div>
                     </div>
                 </div>
-                <hr class='product-separator' />
+                <hr style='margin:10px 0; border:0; border-top:1px solid #eee;'/>
             """, unsafe_allow_html=True)
 
-    components.html("<script>window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]').forEach(c => c.scrollTop = 0);</script>", height=0)
+    components.html("<script>const cols = window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]'); cols.forEach(col => col.scrollTop = 0);</script>", height=0)
