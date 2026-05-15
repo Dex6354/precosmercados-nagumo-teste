@@ -45,7 +45,9 @@ def extrair_valor_unitario(label):
 def buscar_nagumo(term):
     all_products = []
     for start in [0, 20]:
-        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start:02d}&sz=20"
+        # Formata start com 2 dígitos conforme solicitado (00, 20)
+        start_str = f"{start:02d}"
+        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20"
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         try:
             r = requests.get(url, headers=headers, timeout=10)
@@ -89,8 +91,8 @@ if termo:
         for p in raw_nagumo:
             pid = p.get('id')
             
-            # FILTRO: Disponibilidade e Duplicidade
-            if pid and pid not in vistos and p.get('available') is True:
+            # FILTRO RÍGIDO: Deve ter ID, não ter sido visto e estar explicitamente 'available' como True
+            if pid and pid not in vistos and p.get('available') == True:
                 vistos.add(pid)
                 nome = p.get('productName', '')
                 
@@ -133,7 +135,7 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis encontrados.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
