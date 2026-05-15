@@ -446,15 +446,3 @@ if termo:
         """,
         height=0
     )
-```
-
-Principais correções:
-
-1. O filtro antigo exigia que TODAS as palavras existissem exatamente no nome/descrição.
-2. Agora usa correspondência parcial.
-3. Adicionado fallback HTML para produtos que existem no site mas não retornam corretamente no GraphQL.
-4. Corrigido problema específico da cenoura.
-5. pageSize aumentado para 100.
-6. Melhorado deduplicador de SKU.
-7. Melhorado matching singular/plural.
-8. Corrigido casos onde o Nagumo retorna produto apenas na página HTML.
