@@ -94,7 +94,6 @@ def extrair_valor_unitario(preco_unitario):
 
 # --- EXTRAÇÃO VIA REGEX (HTML SCRAPING) ---
 def buscar_nagumo(term):
-    # A URL de busca pública do Nagumo
     url = f"https://www.nagumo.com.br/busca?termo={term}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -104,13 +103,10 @@ def buscar_nagumo(term):
         r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
         
-        # Regex para capturar o conteúdo do atributo 'products' dentro da tag <search-card-grid>
-        # O Nagumo injeta um JSON escapado (entities HTML) dentro desse atributo
         pattern = r'<search-card-grid[^>]*products="([^"]*)"'
         match = re.search(pattern, r.text)
         
         if match:
-            # O conteúdo costuma vir com entidades HTML como &quot;
             json_str = match.group(1).replace('&quot;', '"')
             return json.loads(json_str)
     except Exception as e:
@@ -150,7 +146,6 @@ if termo:
 
     with st.spinner("🔍 Buscando no Nagumo..."):
         raw_nagumo = []
-        # Fazemos a busca para cada variante (singular/plural)
         for t in termos_busca: 
             raw_nagumo.extend(buscar_nagumo(t))
         
@@ -162,7 +157,6 @@ if termo:
                 vistos_nagumo.add(sku)
                 nome, desc = p.get('name', ''), p.get('description', '') or ''
                 
-                # Filtro rigoroso: todas as palavras digitadas devem estar no nome ou descrição
                 if all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
                     promo = p.get('promotion') or {}
                     cond = promo.get('conditions') or []
@@ -187,6 +181,7 @@ if termo:
                 <img src="{LOGO_NAGUMO_URL}" width="100" alt="Nagumo" style="border-radius: 6px; border: 1.5px solid white; padding: 0px;"/>
             </h5>
         """, unsafe_allow_html=True)
+        # CORREÇÃO AQUI: Adicionado aspas duplas após o 'f'
         st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} produto(s) encontrado(s).</small></p>", unsafe_allow_html=True)
         
         if not nagumo_final:
