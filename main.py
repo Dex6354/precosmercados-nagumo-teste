@@ -6,13 +6,20 @@ import re
 import json
 import html
 
-# --- CONFIGURAÇÕES ---
+# --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
 
+# --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
     if not texto: return ""
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
+
+def gerar_formas_variantes(termo):
+    variantes = {termo}
+    if termo.endswith("s"): variantes.add(termo[:-1])
+    else: variantes.add(termo + "s")
+    return list(variantes)
 
 def slugify(text):
     text = remover_acentos(text)
@@ -20,40 +27,59 @@ def slugify(text):
     text = re.sub(r'[-\s]+', '-', text)
     return text
 
-def calcular_preco_unitario(preco, desc, nome):
-    if not preco: return "N/D"
-    texto = remover_acentos(f"{nome} {desc}")
-    # Regex para capturar KG, L, G, ML ou UN
-    m = re.search(r"(\d+[.,]?\d*)\s*(kg|l|g|ml|un)", texto)
-    if m:
-        try:
-            val = float(m.group(1).replace(',', '.'))
-            uni = m.group(2)
-            if val > 0:
-                if uni in ['kg', 'l']: return f"R$ {preco / val:.2f}/{uni}"
-                if uni in ['g', 'ml']: return f"R$ {preco / (val/1000):.2f}/{'kg' if uni=='g' else 'L'}"
-        except: pass
+# --- LÓGICA DE CÁLCULO ---
+def contem_papel_toalha(texto):
+    texto = remover_acentos(texto.lower())
+    return "papel" in texto and "toalha" in texto
+
+def extrair_info_papel_toalha(nome, descricao):
+    texto_nome = remover_acentos(nome.lower())
+    texto_completo = f"{texto_nome} {remover_acentos(descricao.lower())}"
+    for texto in [texto_nome, texto_completo]:
+        match = re.search(r'(\d+)\s*(un|unidades?|rolos?)\s*.*?(\d+)\s*(folhas|toalhas)', texto)
+        if match:
+            rolos, folhas = int(match.group(1)), int(match.group(3))
+            return rolos, folhas, rolos * folhas, f"{rolos} {match.group(2)}, {folhas} {match.group(4)}"
+    return None, None, None, None
+
+def calcular_preco_unitario_nagumo(preco_valor, descricao, nome):
+    if not preco_valor: return "Preço indisponível"
+    texto_completo = f"{nome} {descricao}".lower()
+    if contem_papel_toalha(texto_completo):
+        _, _, total_folhas, _ = extrair_info_papel_toalha(nome, descricao)
+        if total_folhas: return f"R$ {preco_valor / total_folhas:.3f}/folha"
+    
+    fontes = [descricao.lower(), nome.lower()]
+    for fonte in fontes:
+        m = re.search(r"(\d+[.,]?\d*)\s*(kg|l|g|ml|un)", fonte)
+        if m:
+            try:
+                val = float(m.group(1).replace(',', '.'))
+                uni = m.group(2)
+                if val <= 0: continue
+                if uni in ['kg', 'l']: return f"R$ {preco_valor / val:.2f}/{uni}"
+                if uni in ['g', 'ml']: return f"R$ {preco_valor / (val/1000):.2f}/{'kg' if uni=='g' else 'L'}"
+            except: continue
     return "Sem unidade"
 
-def buscar_nagumo_grid(term, start=0):
-    term_enc = requests.utils.quote(term)
-    # URL de fragmento de grid fornecida
-    url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term_enc}&start={start}&sz=20"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "X-Requested-With": "XMLHttpRequest"
-    }
+def extrair_valor_unitario(preco_unitario):
+    match = re.search(r"R\$ (\d+[.,]?\d*)", preco_unitario)
+    return float(match.group(1).replace(',', '.')) if match else float('inf')
+
+# --- REQUISIÇÃO VIA REGEX ---
+def buscar_nagumo(term):
+    term_encoded = requests.utils.quote(term)
+    url = f"https://www.nagumo.com.br/busca?q={term_encoded}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            # Busca o JSON injetado no atributo 'products'
-            match = re.search(r'products="([^"]+)"', r.text)
-            if match:
-                json_str = html.unescape(match.group(1))
-                return json.loads(json_str)
+        match = re.search(r'products="([^"]+)"', r.text)
+        if match:
+            return json.loads(html.unescape(match.group(1)))
     except: pass
     return []
 
+# --- INTERFACE ---
 st.set_page_config(page_title="Preços Nagumo", page_icon="🛒", layout="wide")
 
 st.markdown("""
@@ -61,88 +87,93 @@ st.markdown("""
         .block-container { padding-top: 0rem; }
         footer, #MainMenu, header { visibility: hidden; }
         div, span, strong, small { font-size: 0.75rem !important; }
-        .product-container { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 0rem; }
+        .product-container { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 0rem; flex-wrap: wrap; }
         .product-info { flex: 1; word-break: break-word; }
-        hr { border: none; border-top: 1px solid #eee; margin: 10px 0; }
+        hr.product-separator { border: none; border-top: 1px solid #eee; margin: 10px 0; }
         [data-testid="stColumn"] {
-            overflow-y: auto; max-height: 90vh; padding: 15px; border: 1px solid #f0f2f6; border-radius: 10px;
-            max-width: 600px; margin: auto; background: white;
+            overflow-y: auto; max-height: 90vh; padding: 10px; border: 1px solid #f0f2f6; border-radius: 8px;
+            max-width: 600px; margin-left: auto; margin-right: auto;
         }
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h6>🛒 Nagumo Grid Search (Páginas 1 e 2)</h6>", unsafe_allow_html=True)
-termo = st.text_input("🔎 O que você procura?", "Cenoura").strip()
+st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
+termo = st.text_input("🔎 Digite o nome do produto:", "Banana").strip()
 
 if termo:
     palavras_chave = remover_acentos(termo).split()
-    with st.spinner("🔍 Sincronizando produtos..."):
-        # Faz o merge da primeira leva (0-20) e da segunda (20-40)
-        raw_data = buscar_nagumo_grid(termo, start=0) + buscar_nagumo_grid(termo, start=20)
-        
-        final_list = []
+    with st.spinner("🔍 Buscando..."):
+        raw_data = buscar_nagumo(termo)
+        nagumo_final = []
         vistos = set()
 
         for p in raw_data:
-            sku = str(p.get('id') or p.get('sku'))
-            nome = p.get('productName') or p.get('name', 'Produto sem nome')
+            sku = p.get('id') or p.get('sku') or str(p.get('productName', ''))
+            nome = p.get('productName') or p.get('name', '')
+            desc = p.get('description', '') or ''
             
-            # Filtro de palavras-chave para garantir precisão
-            if sku not in vistos and all(k in remover_acentos(nome) for k in palavras_chave):
+            if sku not in vistos and all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
                 vistos.add(sku)
                 
-                # Tratamento de Preço
-                preco_data = p.get('price', {})
-                if isinstance(preco_data, dict):
-                    val_final = preco_data.get('sales', {}).get('value', 0)
+                # Extração segura de preço
+                preco_obj = p.get('price', {})
+                if isinstance(preco_obj, dict):
+                    preco_final = preco_obj.get('sales', {}).get('value', 0)
                 else:
-                    val_final = float(preco_data or 0)
+                    try: preco_final = float(preco_obj or 0)
+                    except: preco_final = 0
                 
-                # Tratamento de Imagem
-                img = DEFAULT_IMAGE_URL
-                try:
-                    items = p.get('items', [])
-                    if items:
-                        img = items[0].get('images', [{}])[0].get('imageUrl', img)
-                except: pass
-
-                final_list.append({
-                    'nome': nome,
-                    'preco': val_final,
-                    'unit': calcular_preco_unitario(val_final, p.get('description', ''), nome),
-                    'img': img,
-                    'url': f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}"
-                })
-
-    # Centralização do Layout
-    col_l, col_c, col_r = st.columns([1, 2, 1])
-    
-    with col_c:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><b>{len(final_list)} itens encontrados</b></p>", unsafe_allow_html=True)
+                label = calcular_preco_unitario_nagumo(preco_final, desc, nome)
+                
+                p_processado = {
+                    'sku': sku,
+                    'display_name': nome,
+                    'preco_final': preco_final,
+                    'unit_label': label,
+                    'sort_val': extrair_valor_unitario(label),
+                    'url_final': f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}",
+                    'raw': p
+                }
+                nagumo_final.append(p_processado)
         
-        if not final_list:
-            st.info("Nenhum item encontrado para os critérios de busca.")
+        nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
+
+    _, col_center, _ = st.columns([1, 2, 1])
+
+    with col_center:
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} itens encontrados.</small></p>", unsafe_allow_html=True)
+        
+        for p in nagumo_final:
+            raw = p['raw']
             
-        for p in final_list:
+            # Extração segura de imagem (Corrigindo o KeyError)
+            img = DEFAULT_IMAGE_URL
+            items = raw.get('items', [])
+            
+            if isinstance(items, list) and len(items) > 0:
+                # Tenta pegar do primeiro item da lista de SKUs
+                first_item_images = items[0].get('images', [])
+                if first_item_images and isinstance(first_item_images, list):
+                    img = first_item_images[0].get('imageUrl', img)
+            elif 'images' in raw and isinstance(raw['images'], list) and len(raw['images']) > 0:
+                # Tenta pegar da raiz do produto
+                img = raw['images'][0] if isinstance(raw['images'][0], str) else raw['images'][0].get('imageUrl', img)
+            elif 'photosUrl' in raw and isinstance(raw['photosUrl'], list) and len(raw['photosUrl']) > 0:
+                img = raw['photosUrl'][0]
+
             st.markdown(f"""
                 <div class='product-container'>
-                    <a href='{p['url']}' target='_blank'>
-                        <img src="{p['img']}" width="80" style="border-radius:8px; border:1px solid #f0f0f0;"/>
+                    <a href='{p['url_final']}' target='_blank' style='text-decoration:none;'>
+                        <img src="{img}" width="80" style="border-radius: 6px; border: 1px solid #eee; background: white;"/>
                     </a>
                     <div class='product-info'>
-                        <a href='{p['url']}' target='_blank' style='text-decoration:none; color:#333;'>
-                            <strong>{p['nome']}</strong>
-                        </a><br>
-                        <span style='font-weight:bold; font-size:1.1rem; color:#d32f2f;'>R$ {p['preco']:.2f}</span><br>
-                        <div style='color:#777;'>{p['unit']}</div>
+                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['display_name']}</strong></a><br>
+                        <span style='font-weight: bold; font-size: 1rem !important;'>R$ {p['preco_final']:.2f}</span><br>
+                        <div style="color: #666;">{p['unit_label']}</div>
                     </div>
-                </div><hr>
+                </div>
+                <hr class='product-separator' />
             """, unsafe_allow_html=True)
 
-    # JavaScript para resetar o scroll ao topo
-    components.html("""
-        <script>
-            const cols = window.parent.document.querySelectorAll('[data-testid="stColumn"]');
-            cols.forEach(c => c.scrollTop = 0);
-        </script>
-    """, height=0)
+    components.html("<script>window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]').forEach(c => c.scrollTop = 0);</script>", height=0)
