@@ -1,114 +1,102 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import requests
-import unicodedata
+import json
 import re
+import html
+import pandas as pd
 
-# --- CONFIGURAÇÕES E CONSTANTES ---
-LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
-DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
+# Configuração da página
+st.set_page_config(page_title="Nagumo Scraper Debugger", layout="wide")
 
-# --- FUNÇÕES UTILITÁRIAS ---
-def remover_acentos(texto):
-    if not texto: return ""
-    return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
+def extract_products_from_har(har_data):
+    """
+    Localiza a entrada de busca no HAR e extrai os produtos do 
+    componente <search-card-grid> injetado no HTML.
+    """
+    logs = []
+    products_found = []
+    
+    entries = har_data.get('log', {}).get('entries', [])
+    logs.append(f"Total de entradas encontradas no HAR: {len(entries)}")
+    
+    # Busca a entrada específica da URL de busca
+    search_entry = None
+    for entry in entries:
+        url = entry.get('request', {}).get('url', '')
+        if "busca?q=cenoura" in url and entry.get('response', {}).get('status') == 200:
+            search_entry = entry
+            logs.append(f"Entrada de busca identificada: {url}")
+            break
+            
+    if not search_entry:
+        logs.append("ERRO: Nenhuma entrada de busca encontrada no arquivo.")
+        return [], logs
 
-def slugify(text):
-    text = remover_acentos(text)
-    text = re.sub(r'[^a-z0-9\s-]', '', text).strip()
-    text = re.sub(r'[-\s]+', '-', text)
-    return text
+    # Extrai o HTML da resposta
+    content = search_entry.get('response', {}).get('content', {}).get('text', '')
+    if not content:
+        logs.append("ERRO: O conteúdo da resposta está vazio.")
+        return [], logs
 
-# --- NOVA BUSCA (API INTERNA IDENTIFICADA NO .HAR) ---
-def buscar_nagumo_internal(term):
-    """Utiliza a API de vitrine que o site consome diretamente"""
-    # Endpoint de fallback quando o Algolia falha ou é ignorado pelo site
-    url = f"https://www.nagumo.com.br/api/v1/search"
-    params = {
-        "q": term,
-        "sort": "relevance",
-        "page": 1
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Origin": "https://www.nagumo.com.br",
-        "Referer": "https://www.nagumo.com.br/"
-    }
-    try:
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        data = r.json()
-        # Retorna a lista de produtos da estrutura v1
-        return data.get('products', [])
-    except Exception as e:
-        st.error(f"Erro na conexão com a API Nagumo: {e}")
-        return []
-
-# --- INTERFACE ---
-st.set_page_config(page_title="Preços Nagumo", layout="wide")
-
-st.markdown("""<style>
-    .block-container { padding-top: 1rem; }
-    div, span, strong { font-size: 0.8rem !important; }
-    .product-container { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #eee; }
-    .img-box { flex: 0 0 60px; }
-    .price-tag { color: #2e7d32; font-weight: bold; font-size: 1.1rem !important; }
-</style>""", unsafe_allow_html=True)
-
-st.markdown("<h6>🛒 Buscador Nagumo (Internal API)</h6>", unsafe_allow_html=True)
-termo = st.text_input("🔎 Digite o produto:", "Cenoura").strip()
-
-if termo:
-    with st.spinner("Buscando itens..."):
-        produtos = buscar_nagumo_internal(termo)
-        final_list = []
+    # Regex para capturar o JSON dentro do atributo 'products' do componente search-card-grid
+    # Padrão: products="[{...}]"
+    match = re.search(r'products="([^"]+)"', content)
+    
+    if match:
+        logs.append("Componente <search-card-grid> localizado.")
+        # O conteúdo do atributo está com entidades HTML (ex: &quot;)
+        json_raw = html.unescape(match.group(1))
         
-        for p in produtos:
-            nome = p.get('productName', '')
-            sku = p.get('productId') or p.get('sku')
+        try:
+            raw_products = json.loads(json_raw)
+            logs.append(f"JSON decodificado com sucesso. {len(raw_products)} itens brutos.")
             
-            # --- LÓGICA DE PREÇO (CRÍTICA PARA CENOURA) ---
-            # 1. Tenta pegar de flagtypes (comum em itens de hortifruti no Nagumo)
-            # 2. Tenta pegar de price -> sales -> value
-            preco = 0.0
-            if p.get('flagtypes'):
-                preco = p['flagtypes'][0].get('valueFlag', 0.0)
-            
-            if preco == 0:
-                price_data = p.get('price', {})
-                if isinstance(price_data, dict):
-                    preco = price_data.get('sales', {}).get('value', 0.0)
-
-            if preco > 0:
-                # Captura de imagem
-                img = DEFAULT_IMAGE_URL
-                if p.get('images'):
-                    img = p['images'][0].get('src', {}).get('disUrl', DEFAULT_IMAGE_URL)
-                
-                final_list.append({
-                    "nome": nome,
-                    "preco": preco,
-                    "img": img,
-                    "url": f"https://www.nagumo.com.br/p/{slugify(nome)}-{sku}",
-                    "unidade": p.get('averageWeightDisplay', 'un')
+            for p in raw_products:
+                products_found.append({
+                    "ID": p.get("id"),
+                    "Nome": p.get("productName"),
+                    "Preço": p.get("price", {}).get("sales", {}).get("formatted", "N/A"),
+                    "Marca": p.get("brand"),
+                    "Disponível": "Sim" if p.get("available") else "Não"
                 })
+        except Exception as e:
+            logs.append(f"ERRO ao processar JSON: {str(e)}")
+    else:
+        logs.append("ERRO: Atributo 'products' não encontrado no HTML.")
 
-    # Exibição
-    _, col_center, _ = st.columns([1, 2, 1])
-    with col_center:
-        if not final_list:
-            st.warning("Nenhum item encontrado. Tente verificar a conexão ou o termo.")
+    return products_found, logs
+
+# Interface Streamlit
+st.title("🥕 Nagumo HAR Search Extractor")
+st.markdown("Extraia itens e preços diretamente do arquivo `.har` da busca.")
+
+uploaded_file = st.file_uploader("Arraste o arquivo buscacenoura.har aqui", type=["har"])
+
+if uploaded_file is not None:
+    try:
+        har_json = json.load(uploaded_file)
+        
+        # Execução da extração
+        items, debug_logs = extract_products_from_har(har_json)
+        
+        # Seção de Debugger
+        with st.expander("🐞 Debugger / Logs do Sistema", expanded=False):
+            for log in debug_logs:
+                st.code(log)
+        
+        if items:
+            st.success(f"Foram encontrados {len(items)} produtos.")
+            
+            # Exibição em tabela
+            df = pd.DataFrame(items)
+            st.dataframe(df, use_container_width=True)
+            
+            # Botão para baixar CSV
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("Baixar Dados (CSV)", csv, "produtos_nagumo.csv", "text/csv")
         else:
-            for p in final_list:
-                st.markdown(f"""
-                    <div class="product-container">
-                        <div class="img-box"><img src="{p['img']}" width="60"></div>
-                        <div style="flex: 1;">
-                            <a href="{p['url']}" target="_blank" style="text-decoration: none; color: #333;">
-                                <strong>{p['nome']}</strong>
-                            </a><br>
-                            <span class="price-tag">R$ {p['preco']:.2f}</span>
-                            <span style="color: gray; margin-left: 10px;">({p['unidade']})</span>
-                        </div>
-                    </div>
-                """, unsafe_allow_html=True)
+            st.warning("Nenhum dado pôde ser extraído. Verifique o Debugger acima.")
+            
+    except Exception as e:
+        st.error(f"Falha ao ler o arquivo: {e}")
+else:
+    st.info("Aguardando upload do arquivo HAR.")
