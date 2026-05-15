@@ -64,24 +64,39 @@ def extrair_valor_unitario(preco_unitario):
 def buscar_nagumo(term):
     all_products = []
     start = 0
-    sz = 24 # Tamanho padrão do grid do Nagumo
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    sz = 24  # O Nagumo geralmente usa 24 como padrão
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "X-Requested-With": "XMLHttpRequest"
+    }
     
-    while True:
+    # Máximo de 5 páginas para evitar travamentos, ajuste se necessário
+    for _ in range(5):
         url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={requests.utils.quote(term)}&start={start}&sz={sz}"
         try:
-            r = requests.get(url, headers=headers, timeout=10)
+            r = requests.get(url, headers=headers, timeout=15)
+            # Regex ajustada para capturar o atributo 'data-props' ou 'products' de forma mais flexível
             match = re.search(r'products="([^"]+)"', r.text)
+            
             if match:
-                batch = json.loads(html.unescape(match.group(1)))
-                if not batch: break
+                decoded_json = html.unescape(match.group(1))
+                batch = json.loads(decoded_json)
+                
+                if not batch or len(batch) == 0:
+                    break
+                
                 all_products.extend(batch)
-                if len(batch) < sz: break
+                
+                # Se vier menos que o tamanho da página, chegamos ao fim
+                if len(batch) < sz:
+                    break
                 start += sz
             else:
                 break
-        except:
+        except Exception as e:
+            st.error(f"Erro na busca: {e}")
             break
+            
     return all_products
 
 # --- INTERFACE ---
@@ -103,23 +118,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
-termo = st.text_input("🔎 Digite o nome do produto:", "Banana").strip()
+termo = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
 
 if termo:
     palavras_chave = remover_acentos(termo).split()
-    with st.spinner("🔍 Buscando todas as páginas..."):
+    with st.spinner(f"🔍 Buscando '{termo}' em todas as páginas..."):
         raw_data = buscar_nagumo(termo)
         nagumo_final = []
         vistos = set()
 
         for p in raw_data:
-            sku = p.get('id') or p.get('sku') or str(p.get('productName', ''))
+            sku = str(p.get('id') or p.get('sku') or '')
             nome = p.get('productName') or p.get('name', '')
             desc = p.get('description', '') or ''
             
-            if sku not in vistos and all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
+            if sku and sku not in vistos and all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
                 vistos.add(sku)
                 
+                # Extração de preço
                 preco_obj = p.get('price', {})
                 if isinstance(preco_obj, dict):
                     preco_final = preco_obj.get('sales', {}).get('value', 0)
@@ -151,16 +167,15 @@ if termo:
         for p in nagumo_final:
             raw = p['raw']
             img = DEFAULT_IMAGE_URL
-            items = raw.get('items', [])
             
+            # Lógica robusta de imagem
+            items = raw.get('items', [])
             if isinstance(items, list) and len(items) > 0:
-                first_item_images = items[0].get('images', [])
-                if first_item_images and isinstance(first_item_images, list):
-                    img = first_item_images[0].get('imageUrl', img)
-            elif 'images' in raw and isinstance(raw['images'], list) and len(raw['images']) > 0:
-                img = raw['images'][0] if isinstance(raw['images'][0], str) else raw['images'][0].get('imageUrl', img)
-            elif 'photosUrl' in raw and isinstance(raw['photosUrl'], list) and len(raw['photosUrl']) > 0:
-                img = raw['photosUrl'][0]
+                imgs = items[0].get('images', [])
+                if imgs: img = imgs[0].get('imageUrl', img)
+            elif 'images' in raw and raw['images']:
+                first_img = raw['images'][0]
+                img = first_img.get('imageUrl', img) if isinstance(first_img, dict) else first_img
 
             st.markdown(f"""
                 <div class='product-container'>
