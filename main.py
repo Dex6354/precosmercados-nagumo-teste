@@ -48,7 +48,6 @@ def calcular_preco_unitario_nagumo(preco_valor, descricao, nome, unidade_api=Non
         _, _, total_folhas, _ = extrair_info_papel_toalha(nome, descricao)
         if total_folhas: return f"R$ {preco_valor / total_folhas:.3f}/folha"
     
-    # Lógica simplificada de KG/L/UN
     fontes = [descricao.lower(), nome.lower()]
     for fonte in fontes:
         m = re.search(r"(\d+[.,]?\d*)\s*(kg|l|g|ml|un)", fonte)
@@ -105,20 +104,26 @@ if termo:
         vistos = set()
 
         for p in raw_data:
-            sku = p.get('sku') or p.get('id')
-            nome = p.get('name', '')
+            sku = p.get('id') or p.get('sku')
+            nome = p.get('productName') or p.get('name', '')
             desc = p.get('description', '') or ''
             
             if sku not in vistos and all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
                 vistos.add(sku)
-                # Ajuste de Preço: o JSON injetado traz o preço direto ou em 'price'
-                preco_final = float(p.get('price', 0))
+                
+                # Mapeamento do Preço no JSON injetado
+                preco_obj = p.get('price', {})
+                if isinstance(preco_obj, dict):
+                    preco_final = preco_obj.get('sales', {}).get('value', 0)
+                else:
+                    preco_final = float(preco_obj or 0)
                 
                 p['url_final'] = f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}"
                 label = calcular_preco_unitario_nagumo(preco_final, desc, nome)
                 p['unit_label'] = label
                 p['sort_val'] = extrair_valor_unitario(label)
                 p['preco_final'] = preco_final
+                p['display_name'] = nome
                 nagumo_final.append(p)
         
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
@@ -127,12 +132,12 @@ if termo:
 
     with col_center:
         st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/></p>", unsafe_allow_html=True)
-        st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} itens.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} itens encontrados.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
-            # Ajuste de Imagem: tenta 'images' ou 'photosUrl'
-            imgs = p.get('images', []) or p.get('photosUrl', [])
-            img = imgs[0] if (isinstance(imgs, list) and imgs) else DEFAULT_IMAGE_URL
+            # Mapeamento da Imagem
+            imgs = p.get('items', [{}])[0].get('images', []) or p.get('images', [])
+            img = imgs[0].get('imageUrl') if (imgs and isinstance(imgs[0], dict)) else (imgs[0] if imgs else DEFAULT_IMAGE_URL)
             
             st.markdown(f"""
                 <div class='product-container'>
@@ -140,10 +145,10 @@ if termo:
                         <img src="{img}" width="80" style="border-radius: 6px; border: 1px solid #eee;"/>
                     </a>
                     <div class='product-info'>
-                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['name']}</strong></a><br>
+                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['display_name']}</strong></a><br>
                         <span style='font-weight: bold; font-size: 1rem !important;'>R$ {p['preco_final']:.2f}</span><br>
                         <div style="color: #666;">{p['unit_label']}</div>
-                        <div style="color: gray; font-size: 0.7rem;">Estoque: {p.get('stock', 'Várias')}</div>
+                        <div style="color: gray; font-size: 0.7rem;">Estoque: {p.get('stock', 'Disponível')}</div>
                     </div>
                 </div>
                 <hr class='product-separator' />
