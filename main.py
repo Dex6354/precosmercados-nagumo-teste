@@ -187,7 +187,7 @@ if termo:
                 <img src="{LOGO_NAGUMO_URL}" width="100" alt="Nagumo" style="border-radius: 6px; border: 1.5px solid white; padding: 0px;"/>
             </h5>
         """, unsafe_allow_html=True)
-        st.markdown(f<p align='center'><small>🔎 {len(nagumo_final)} produto(s) encontrado(s).</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} produto(s) encontrado(s).</small></p>", unsafe_allow_html=True)
         
         if not nagumo_final:
             st.warning("Nenhum produto encontrado.")
