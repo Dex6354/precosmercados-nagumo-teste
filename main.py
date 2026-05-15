@@ -7,6 +7,7 @@ import re
 # --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
+STORE_ID = "22" # 022-CALMON
 
 # --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
@@ -39,15 +40,26 @@ def extrair_valor_unitario(label):
     match = re.search(r"R\$ (\d+[.,]?\d*)", label)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-# --- REQUISIÇÃO NAGUMO ---
+# --- REQUISIÇÃO NAGUMO COM SESSÃO E LOJA ---
 def buscar_nagumo(term):
     all_products = []
+    session = requests.Session()
+    
+    # 1. Tenta setar a loja na sessão (simulando a seleção do usuário)
+    # Alguns endpoints do Demandware aceitam o parâmetro 'StoreID' ou dependem de cookies setados em requisições de 'Store-Set'
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.nagumo.com.br/"
+    }
+
     for start in [0, 20]:
         start_str = f"{start:02d}"
-        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20"
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        # Incluindo parâmetros que costumam forçar o contexto da loja em APIs SFCC
+        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20&StoreID={STORE_ID}"
+        
         try:
-            r = requests.get(url, headers=headers, timeout=10)
+            r = session.get(url, headers=headers, timeout=15)
             if r.status_code == 200:
                 data = r.json()
                 products = data.get('productsSearchResult', [])
@@ -58,7 +70,7 @@ def buscar_nagumo(term):
     return all_products
 
 # --- INTERFACE STREAMLIT ---
-st.set_page_config(page_title="Preços Nagumo", page_icon="🛒", layout="wide")
+st.set_page_config(page_title="Preços Nagumo - Calmon", page_icon="🛒", layout="wide")
 
 st.markdown("""
     <style>
@@ -72,33 +84,33 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
-termo = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
+st.markdown("<h6>🛒 Preços Nagumo - Loja 022 Calmon</h6>", unsafe_allow_html=True)
+termo = st.text_input("🔎 Pesquisar produto:", "Cenoura").strip()
 
 if termo:
     termos_busca = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
 
-    with st.spinner("🔍 Buscando no Nagumo..."):
+    with st.spinner("🔍 Consultando estoque da loja 022..."):
         raw_nagumo = []
         for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t))
         
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
-            # --- FILTRO DE DISPONIBILIDADE (ESTRITO) ---
-            # Se for False ou qualquer coisa diferente de True, pula
+            # --- FILTRO DE DISPONIBILIDADE RÍGIDO ---
             if p.get('available') is not True:
                 continue
             
-            # Garante que tenha ID e não seja repetido
             pid = p.get('id')
             if not pid or pid in vistos:
                 continue
             
-            # Garante que tenha o objeto de preço de venda (sales) ativo
+            # Validação do Objeto de Preço
             price_data = p.get('price', {})
             sales_obj = price_data.get('sales')
+            
+            # Se não houver preço de venda, consideramos indisponível
             if not sales_obj or sales_obj.get('value') is None:
                 continue
 
@@ -110,6 +122,7 @@ if termo:
                 preco_final = preco_venda
                 has_promo = False
                 
+                # Cálculo de promoção "Meu Nagumo" via flags
                 flags = p.get('flagtypes', [])
                 if flags and isinstance(flags, list):
                     val_flag = flags[0].get('valueFlag')
@@ -141,8 +154,11 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>📍 Loja: 022-CALMON | 🔎 {len(nagumo_final)} itens disponíveis.</small></p>", unsafe_allow_html=True)
         
+        if not nagumo_final:
+            st.info("Nenhum item disponível encontrado para esta busca na loja selecionada.")
+
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
             if p['has_promo']:
