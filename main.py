@@ -19,7 +19,6 @@ def gerar_formas_variantes(termo):
     else: variantes.add(termo + "s")
     return list(variantes)
 
-# --- LÓGICA DE CÁLCULO ---
 def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda):
     texto = remover_acentos(nome.lower())
     match = re.search(r'(\d+[.,]?\d*)\s*(kg|g|l|ml|un)', texto)
@@ -34,8 +33,7 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda):
                 if unid == 'l': return f"R$ {preco_valor / valor:.2f}/L"
                 if unid == 'un': return f"R$ {preco_valor / valor:.2f}/un"
         except: pass
-    if medida_venda == "unity": return f"R$ {preco_valor:.2f}/un"
-    return "---"
+    return f"R$ {preco_valor:.2f}/un" if medida_venda == "unity" else "---"
 
 def extrair_valor_unitario(label):
     match = re.search(r"R\$ (\d+[.,]?\d*)", label)
@@ -45,8 +43,7 @@ def extrair_valor_unitario(label):
 def buscar_nagumo(term):
     all_products = []
     for start in [0, 20]:
-        start_str = f"{start:02d}"
-        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20"
+        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start:02d}&sz=20"
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         try:
             r = requests.get(url, headers=headers, timeout=10)
@@ -88,26 +85,29 @@ if termo:
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
-            # 1. BLOQUEIO IMEDIATO DE ITENS INDISPONÍVEIS
-            if p.get('available') is False:
+            # --- FILTRO DE DISPONIBILIDADE (CRÍTICO) ---
+            # Se available for False, None ou não existir, ignoramos.
+            if p.get('available') is not True:
                 continue
             
-            # 2. BLOQUEIO DE DUPLICADOS E IDS INVÁLIDOS
             pid = p.get('id')
             if not pid or pid in vistos:
                 continue
             
             nome = p.get('productName', '')
-            # 3. FILTRO DE PALAVRAS-CHAVE
             if all(k in remover_acentos(nome) for k in palavras_chave):
                 vistos.add(pid)
                 
-                # Extração de Preços
-                price_obj = p.get('price', {}).get('sales', {})
-                try:
-                    preco_venda = float(price_obj.get('value', 0))
-                except:
-                    preco_venda = 0.0
+                # Extração segura de preço
+                price_data = p.get('price', {})
+                sales_obj = price_data.get('sales')
+                
+                # Se sales for nulo, tenta buscar em list, senão assume 0
+                if sales_obj:
+                    preco_venda = float(sales_obj.get('value', 0))
+                else:
+                    list_obj = price_data.get('list')
+                    preco_venda = float(list_obj.get('value', 0)) if list_obj else 0.0
 
                 preco_final = preco_venda
                 has_promo = False
@@ -122,17 +122,21 @@ if termo:
 
                 label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
                 
-                p['calc_label'] = label
-                p['sort_val'] = extrair_valor_unitario(label)
-                p['preco_final'] = preco_final
-                p['preco_normal'] = preco_venda
-                p['has_promo'] = has_promo
+                # Dados para exibição
+                img_list = p.get('images', {}).get('medium', [])
+                img_url = img_list[0].get('absURL', DEFAULT_IMAGE_URL) if img_list else DEFAULT_IMAGE_URL
                 
-                img_data = p.get('images', {}).get('medium', [{}])
-                p['img_url'] = img_data[0].get('absURL', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL
-                p['link'] = p.get('productShowFullUrl', '#')
-                
-                nagumo_final.append(p)
+                nagumo_final.append({
+                    'name': nome,
+                    'preco_final': preco_final,
+                    'preco_normal': preco_venda,
+                    'has_promo': has_promo,
+                    'calc_label': label,
+                    'sort_val': extrair_valor_unitario(label),
+                    'img_url': img_url,
+                    'link': p.get('productShowFullUrl', '#'),
+                    'brand': p.get('brand', 'N/A')
+                })
         
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
 
@@ -153,10 +157,10 @@ if termo:
                         <img src="{p['img_url']}" width="80" style="border-radius:8px; border:1px solid #eee; background: white;"/>
                     </a>
                     <div class='product-info'>
-                        <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['productName']}</strong></a><br>
+                        <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['name']}</strong></a><br>
                         {preco_html}<br>
                         <div style="color: #666; margin-top:2px;">{p['calc_label']}</div>
-                        <div style="color: gray; font-size: 0.7rem;">Marca: {p.get('brand', 'N/A')}</div>
+                        <div style="color: gray; font-size: 0.7rem;">Marca: {p['brand']}</div>
                     </div>
                 </div>
                 <hr style='margin:10px 0; border:0; border-top:1px solid #eee;'/>
