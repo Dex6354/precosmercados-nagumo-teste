@@ -56,21 +56,22 @@ def listar_lojas():
     url = "https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Stores-AvailableStores"
     try:
         r = session.get(url, timeout=10)
+        # O JSON usa "ID" e "name"
         return r.json().get('stores', [])
     except:
         return []
 
 def selecionar_loja(store_id):
     session = get_nagumo_session()
-    # Rota do HAR para atualizar a loja selecionada
+    # Rota para fixar a loja no contexto do site
     url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Stores-UpdateSelectedStore?storeID={store_id}&pickupStoreID={store_id}"
     session.get(url, timeout=10)
-    # Forçar cookies manuais conforme o HAR
+    # Garante os cookies na sessão do robô
     session.cookies.set("dw_store", store_id, domain="www.nagumo.com.br")
     session.cookies.set("hasSelectedStore", store_id, domain="www.nagumo.com.br")
 
 # --- REQUISIÇÃO DE BUSCA ---
-def buscar_nagumo(term, store_id):
+def buscar_nagumo(term):
     session = get_nagumo_session()
     all_products = []
     for start in [0, 20]:
@@ -95,31 +96,32 @@ st.markdown("""
         .block-container { padding-top: 1rem; }
         div, span, strong, small { font-size: 0.75rem !important; }
         header[data-testid="stHeader"] { display: none; }
-        .stSelectbox label { font-weight: bold; color: red; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- SEÇÃO DE DEBUG (SELEÇÃO DE LOJA) ---
-with st.expander("🛠️ DEBUG: Configurar Loja e Sessão", expanded=True):
+# --- SEÇÃO DE DEBUG ---
+with st.expander("🛠️ CONFIGURAÇÃO DE LOJA (Sessão Ativa)", expanded=True):
     lojas = listar_lojas()
     if lojas:
-        opcoes_lojas = {f"{l['id']} - {l['name']}": l['id'] for l in lojas}
-        # Localiza a loja 22 por padrão se estiver na lista
+        # Correção do KeyError: usando l.get('ID') em vez de l['id']
+        opcoes_lojas = {f"{l.get('ID', 'N/D')} - {l.get('name', 'Sem Nome')}": l.get('ID') for l in lojas if l.get('ID')}
+        
+        # Seleciona a loja 22 por padrão
         default_idx = list(opcoes_lojas.values()).index("22") if "22" in opcoes_lojas.values() else 0
         
-        loja_selecionada_label = st.selectbox("Selecione a Loja para fixar no Cookie:", list(opcoes_lojas.keys()), index=default_idx)
+        loja_selecionada_label = st.selectbox("Selecione a Loja:", list(opcoes_lojas.keys()), index=default_idx)
         store_id_atual = opcoes_lojas[loja_selecionada_label]
         
-        if st.button("Fixar Loja Selecionada"):
+        if st.button("Aplicar e Fixar Loja"):
             selecionar_loja(store_id_atual)
-            st.success(f"Loja {store_id_atual} fixada com sucesso!")
+            st.success(f"Loja {store_id_atual} fixada!")
             st.rerun()
     else:
-        st.error("Não foi possível carregar a lista de lojas.")
+        st.warning("Lista de lojas vazia. Verifique a conexão.")
         store_id_atual = "22"
 
-# --- BUSCA DE PRODUTOS ---
-termo = st.text_input("🔎 Pesquisar produto:", "Banana").strip()
+# --- BUSCA ---
+termo = st.text_input("🔎 Pesquisar:", "Banana").strip()
 
 if termo:
     termos_busca = gerar_formas_variantes(remover_acentos(termo))
@@ -127,27 +129,23 @@ if termo:
 
     with st.spinner(f"🔍 Buscando na Loja {store_id_atual}..."):
         raw_nagumo = []
-        for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t, store_id_atual))
+        for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t))
         
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
-            if p.get('available') is not True:
-                continue
+            if p.get('available') is not True: continue # Filtra indisponíveis
             
             pid = p.get('id')
-            if not pid or pid in vistos:
-                continue
+            if not pid or pid in vistos: continue
             
             price_data = p.get('price', {})
             sales_obj = price_data.get('sales')
-            if not sales_obj or sales_obj.get('value') is None:
-                continue
+            if not sales_obj or sales_obj.get('value') is None: continue
 
             nome = p.get('productName', '')
             if all(k in remover_acentos(nome) for k in palavras_chave):
                 vistos.add(pid)
-                
                 preco_venda = float(sales_obj.get('value', 0))
                 preco_final = preco_venda
                 has_promo = False
@@ -166,23 +164,17 @@ if termo:
                 img_url = img_list[0].get('absURL', DEFAULT_IMAGE_URL) if img_list else DEFAULT_IMAGE_URL
                 
                 nagumo_final.append({
-                    'name': nome,
-                    'preco_final': preco_final,
-                    'preco_normal': preco_venda,
-                    'has_promo': has_promo,
-                    'calc_label': label,
-                    'sort_val': extrair_valor_unitario(label),
-                    'img_url': img_url,
+                    'name': nome, 'preco_final': preco_final, 'preco_normal': preco_venda,
+                    'has_promo': has_promo, 'calc_label': label,
+                    'sort_val': extrair_valor_unitario(label), 'img_url': img_url,
                     'link': p.get('productShowFullUrl', '#')
                 })
         
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
 
-    # Exibição
     _, col_center, _ = st.columns([1, 2, 1])
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>📍 Loja Ativa: {store_id_atual} | 🔎 {len(nagumo_final)} itens.</small></p>", unsafe_allow_html=True)
-        
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>📍 Loja: {store_id_atual} | 🔎 {len(nagumo_final)} itens.</small></p>", unsafe_allow_html=True)
         for p in nagumo_final:
             preco_html = f"<span style='font-size: 1rem; font-weight: bold;'>R$ {p['preco_final']:.2f}</span>"
             if p['has_promo']:
@@ -201,5 +193,4 @@ if termo:
                 <hr style='margin:10px 0; border:0; border-top:1px solid #eee;'/>
             """, unsafe_allow_html=True)
 
-# SCRIPT PARA ROLAR AO TOPO
 components.html("<script>const cols = window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]'); cols.forEach(col => col.scrollTop = 0);</script>", height=0)
