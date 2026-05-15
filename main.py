@@ -1,85 +1,110 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
+import unicodedata
 import re
 import html
 import json
 import pandas as pd
 
-# Configuração da página
-st.set_page_config(page_title="Nagumo Search", page_icon="🥕")
+# --- CONFIGURAÇÕES E CONSTANTES ---
+LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
+DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
 
+# --- FUNÇÕES UTILITÁRIAS ---
+def remover_acentos(texto):
+    if not texto: return ""
+    return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
+
+# --- LÓGICA DE BUSCA NAGUMO (CORRIGIDA) ---
 def buscar_produtos_nagumo(termo_busca):
-    """
-    Faz o scraping em tempo real da página de busca do Nagumo.
-    """
     url = f"https://www.nagumo.com.br/busca?q={termo_busca}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "pt-BR,pt;q=0.9"
     }
     
-    logs = []
-    products_list = []
+    produtos_formatados = []
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        logs.append(f"Status Code: {response.status_code}")
-        
+        response = requests.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
-            # Localiza o componente <search-card-grid> que contém o atributo products="..."
-            content = response.text
-            match = re.search(r'products="([^"]+)"', content)
-            
+            # Extração via Regex do componente que contém o JSON de produtos
+            match = re.search(r'products="([^"]+)"', response.text)
             if match:
-                # Decodifica as entidades HTML (&quot;) e carrega o JSON
                 json_raw = html.unescape(match.group(1))
-                data = json.loads(json_raw)
+                dados_brutos = json.loads(json_raw)
                 
-                for p in data:
-                    products_list.append({
-                        "Nome": p.get("productName"),
-                        "Preço": p.get("price", {}).get("sales", {}).get("formatted", "N/A"),
-                        "Marca": p.get("brand"),
-                        "ID": p.get("id")
+                for p in dados_brutos:
+                    # Mapeamento para o seu layout atual
+                    img_data = p.get("images", {}).get("large", [{}])[0]
+                    img_url = img_data.get("url", DEFAULT_IMAGE_URL)
+                    
+                    # Garantir que a URL da imagem seja absoluta
+                    if img_url.startswith('/'):
+                        img_url = f"https://www.nagumo.com.br{img_url}"
+
+                    produtos_formatados.append({
+                        "id": p.get("id"),
+                        "productName": p.get("productName"),
+                        "price_formatted": p.get("price", {}).get("sales", {}).get("formatted", "R$ 0,00"),
+                        "price_value": p.get("price", {}).get("sales", {}).get("value", 0),
+                        "image": img_url,
+                        "brand": p.get("brand", "Nagumo"),
+                        "url_final": f"https://www.nagumo.com.br/p/{p.get('id')}", # URL aproximada
+                        "unit_label": "Unidade" # Campo padrão
                     })
-                logs.append(f"Sucesso: {len(products_list)} itens encontrados.")
-            else:
-                logs.append("Aviso: Estrutura de produtos não encontrada na página.")
-        else:
-            logs.append(f"Erro na requisição: {response.status_code}")
-            
     except Exception as e:
-        logs.append(f"Erro de conexão: {str(e)}")
+        st.error(f"Erro na busca: {e}")
         
-    return products_list, logs
+    return produtos_formatados
 
-# --- Interface Streamlit ---
-st.title("🥕 Nagumo Real-Time Search")
+# --- INTERFACE ---
+st.title("🥕 Nagumo Search - Layout Final")
 
-# Campo de busca
-query = st.text_input("O que você deseja buscar no Nagumo?", placeholder="Ex: cenoura, leite, arroz...")
+# CSS para manter o layout original
+st.markdown("""
+    <style>
+    .product-container { display: flex; align-items: center; padding: 10px; }
+    .product-image-box { margin-right: 15px; }
+    .product-info { font-family: sans-serif; }
+    .product-separator { border: 0; border-top: 1px solid #eee; margin: 10px 0; }
+    </style>
+""", unsafe_allow_html=True)
+
+query = st.text_input("Buscar no Nagumo:", placeholder="Ex: cenoura")
 
 if query:
-    with st.spinner(f"Buscando '{query}' no Nagumo..."):
-        resultados, debug_info = buscar_produtos_nagumo(query)
-    
-    # Debugger lateral ou expansível
-    with st.sidebar:
-        st.header("🐞 Debugger")
-        for log in debug_info:
-            st.write(f"- {log}")
+    with st.spinner("Buscando..."):
+        resultados = buscar_produtos_nagumo(query)
 
     if resultados:
-        st.success(f"Resultados para: {query}")
-        
-        # Exibe em tabela
-        df = pd.DataFrame(resultados)
-        st.dataframe(df, use_container_width=True)
-        
-        # Download
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("Baixar Resultados (CSV)", csv, f"busca_{query}.csv", "text/csv")
+        for p in resultados:
+            titulo = p['productName']
+            preco_str = p['price_formatted']
+            img = p['image']
+
+            st.markdown(f"""
+                <div class='product-container'>
+                    <a href='{p['url_final']}' target='_blank' class='product-image-box'>
+                        <img src="{img}" width="80" style="background-color: white; border-radius: 6px; display: block;"/>
+                    </a>
+                    <div class='product-info'>
+                        <div style="font-size: 0.8em; color: gray;">{p['brand']}</div>
+                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:inherit;'>
+                            <strong>{titulo}</strong>
+                        </a><br>
+                        <span style='color: #2e7d32; font-weight: bold; font-size: 1.1rem;'>{preco_str}</span><br>
+                        <div style="margin-top: 4px; font-size: 0.8em; color: #666;">ID: {p['id']}</div>
+                    </div>
+                </div>
+                <hr class='product-separator' />
+            """, unsafe_allow_html=True)
     else:
-        st.error("Nenhum item encontrado ou houve um erro na extração.")
-else:
-    st.info("Digite um termo acima para iniciar a busca.")
+        st.warning("Nenhum produto encontrado.")
+
+# Footer/Debugger Sidebar
+with st.sidebar:
+    st.header("Status")
+    if query:
+        st.write(f"Termo: {query}")
+        st.write(f"Resultados: {len(resultados) if 'resultados' in locals() else 0}")
