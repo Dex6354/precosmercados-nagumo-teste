@@ -7,10 +7,7 @@ import re
 # --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
-STORE_ID = "22"
-
-# Cookies fornecidos para fixar a sessão na loja 22
-COOKIES_STR = "dwanonymous_5d818dfb70ce6548e4c78478fa83ac5f=ab7abcVmvLsEJiuABYP06N9A4M; sid=GBWbvo8brwgBUaBzE253-CCTRnEDwCEABMQ; dwsid=lbdyTvaMYNBmcroE8ZbZLK0xr4F6V-7YY-duGfCAMBi8HSRKO6vOh1Azo2fjgVL59MLg-HaJLawXwQqOxzfJfQ==; user_loggedin=true; dw_consent=tracking=false; __cq_dnt=1; dw_dnt=1; hasSelectedStore=22; dw_store=22"
+STORE_ID = "22" 
 
 # --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
@@ -45,25 +42,27 @@ def extrair_valor_unitario(label):
 
 # --- REQUISIÇÃO NAGUMO ---
 def buscar_nagumo(term):
-    all_products = []
     session = requests.Session()
-    
-    # Converte string de cookies em dicionário
-    cookies = {c.split('=')[0].strip(): c.split('=')[1].strip() for c in COOKIES_STR.split(';')}
-    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Priority": "u=1, i",
-        "Referer": "https://www.nagumo.com.br/"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest"
     }
 
+    # 1. PASSO CRUCIAL: Setar a loja na sessão do robô
+    try:
+        set_store_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Stores-SetStore?storeID={STORE_ID}"
+        session.get(set_store_url, headers=headers, timeout=10)
+    except:
+        pass
+
+    all_products = []
     for start in [0, 20]:
         start_str = f"{start:02d}"
         url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20"
         
         try:
-            r = session.get(url, headers=headers, cookies=cookies, timeout=15)
+            r = session.get(url, headers=headers, timeout=15)
             if r.status_code == 200:
                 data = r.json()
                 products = data.get('productsSearchResult', [])
@@ -74,7 +73,7 @@ def buscar_nagumo(term):
     return all_products
 
 # --- INTERFACE STREAMLIT ---
-st.set_page_config(page_title="Nagumo - Loja 22", page_icon="🛒", layout="wide")
+st.set_page_config(page_title="Nagumo Calmon", page_icon="🛒", layout="wide")
 
 st.markdown("""
     <style>
@@ -89,20 +88,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("<h6>🛒 Preços Nagumo - Loja 022 Calmon</h6>", unsafe_allow_html=True)
-termo = st.text_input("🔎 Pesquisar produto:", "Cenoura").strip()
+termo = st.text_input("🔎 Pesquisar produto:", "Banana").strip()
 
 if termo:
     termos_busca = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
 
-    with st.spinner("🔍 Consultando estoque e preços..."):
+    with st.spinner("🔍 Sincronizando com a loja 022..."):
         raw_nagumo = []
         for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t))
         
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
-            # FILTRO ESTRITO DE DISPONIBILIDADE
+            # FILTRO DE DISPONIBILIDADE (ESTRITO)
             if p.get('available') is not True:
                 continue
             
@@ -154,13 +153,13 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>📍 Loja: 022-CALMON | 🔎 {len(nagumo_final)} itens disponíveis.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>📍 022-CALMON | 🔎 {len(nagumo_final)} itens encontrados.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
             if p['has_promo']:
                 desc = ((p['preco_normal'] - p['preco_final']) / p['preco_normal']) * 100
-                preco_html += f" <span class='off-tag'>({desc:.0f}% OFF Meu Nagumo)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
+                preco_html += f" <span class='off-tag'>({desc:.0f}% OFF)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
 
             st.markdown(f"""
                 <div class='product-container'>
@@ -171,7 +170,6 @@ if termo:
                         <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['name']}</strong></a><br>
                         {preco_html}<br>
                         <div style="color: #666; margin-top:2px;">{p['calc_label']}</div>
-                        <div style="color: gray; font-size: 0.7rem;">Marca: {p['brand']}</div>
                     </div>
                 </div>
                 <hr style='margin:10px 0; border:0; border-top:1px solid #eee;'/>
