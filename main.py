@@ -22,28 +22,8 @@ def slugify(text):
     text = re.sub(r'[-\s]+', '-', text)
     return text
 
-# --- LÓGICA DE CÁLCULO ---
-def contem_papel_toalha(texto):
-    texto = remover_acentos(texto.lower())
-    return "papel" in texto and "toalha" in texto
-
-def extrair_info_papel_toalha(nome, descricao):
-    texto_nome = remover_acentos(nome.lower())
-    texto_completo = f"{texto_nome} {remover_acentos(descricao.lower())}"
-    for texto in [texto_nome, texto_completo]:
-        match = re.search(r'(\d+)\s*(un|unidades?|rolos?)\s*.*?(\d+)\s*(folhas|toalhas)', texto)
-        if match:
-            rolos, folhas = int(match.group(1)), int(match.group(3))
-            return rolos, folhas, rolos * folhas, f"{rolos} {match.group(2)}, {folhas} {match.group(4)}"
-    return None, None, None, None
-
 def calcular_preco_unitario_nagumo(preco_valor, descricao, nome):
     if not preco_valor: return "Preço indisponível"
-    texto_completo = f"{nome} {descricao}".lower()
-    if contem_papel_toalha(texto_completo):
-        _, _, total_folhas, _ = extrair_info_papel_toalha(nome, descricao)
-        if total_folhas: return f"R$ {preco_valor / total_folhas:.3f}/folha"
-    
     fontes = [descricao.lower(), nome.lower()]
     for fonte in fontes:
         m = re.search(r"(\d+[.,]?\d*)\s*(kg|l|g|ml|un)", fonte)
@@ -61,140 +41,138 @@ def extrair_valor_unitario(preco_unitario):
     match = re.search(r"R\$ (\d+[.,]?\d*)", preco_unitario)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-# --- REQUISIÇÃO COM PAGINAÇÃO ---
+# --- REQUISIÇÃO CORRIGIDA ---
 def buscar_nagumo(term, start=0, sz=20):
     term_encoded = requests.utils.quote(term)
-    # Usando a URL de UpdateGrid para suportar a paginação (start e sz)
+    # URL de busca que o Nagumo usa para carregar o grid
     url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term_encoded}&start={start}&sz={sz}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "X-Requested-With": "XMLHttpRequest", # Essencial para UpdateGrid
+        "Accept": "*/*"
+    }
+    
     try:
-        r = requests.get(url, headers=headers, timeout=10)
-        # O Nagumo injeta o JSON dos produtos em um atributo 'products' no HTML retornado
+        r = requests.get(url, headers=headers, timeout=15)
+        # O Nagumo coloca o JSON em products="...". Usamos um regex mais flexível.
         match = re.search(r'products="([^"]+)"', r.text)
         if match:
-            return json.loads(html.unescape(match.group(1)))
+            json_data = html.unescape(match.group(1))
+            return json.loads(json_data)
     except Exception as e:
-        print(f"Erro na busca: {e}")
+        st.error(f"Erro na conexão: {e}")
     return []
 
-# --- INTERFACE ---
+# --- INTERFACE STREAMLIT ---
 st.set_page_config(page_title="Preços Nagumo", page_icon="🛒", layout="wide")
 
 st.markdown("""
     <style>
-        .block-container { padding-top: 0.5rem; }
+        .block-container { padding-top: 1rem; }
         footer, #MainMenu, header { visibility: hidden; }
         div, span, strong, small { font-size: 0.75rem !important; }
         .product-container { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 0rem; flex-wrap: wrap; }
         .product-info { flex: 1; word-break: break-word; }
         hr.product-separator { border: none; border-top: 1px solid #eee; margin: 10px 0; }
         [data-testid="stColumn"] {
-            overflow-y: auto; max-height: 90vh; padding: 10px; border: 1px solid #f0f2f6; border-radius: 8px;
+            overflow-y: auto; max-height: 85vh; padding: 15px; border: 1px solid #f0f2f6; border-radius: 8px;
             max-width: 600px; margin-left: auto; margin-right: auto;
         }
+        .stButton button { width: 100%; }
     </style>
 """, unsafe_allow_html=True)
 
+# Estado da sessão
+if 'produtos' not in st.session_state: st.session_state.produtos = []
+if 'offset' not in st.session_state: st.session_state.offset = 0
+if 'termo_atual' not in st.session_state: st.session_state.termo_atual = ""
+
 st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
+termo_input = st.text_input("🔎 Digite o nome do produto:", value="Banana").strip()
 
-# Inicialização do estado para paginação
-if 'lista_produtos' not in st.session_state:
-    st.session_state.lista_produtos = []
-if 'start_index' not in st.session_state:
-    st.session_state.start_index = 0
-if 'termo_anterior' not in st.session_state:
-    st.session_state.termo_anterior = ""
+# Resetar se o termo mudar
+if termo_input != st.session_state.termo_atual:
+    st.session_state.produtos = []
+    st.session_state.offset = 0
+    st.session_state.termo_atual = termo_input
 
-termo = st.text_input("🔎 Digite o nome do produto:", "Banana").strip()
-
-# Se o termo mudar, reseta a busca
-if termo != st.session_state.termo_anterior:
-    st.session_state.lista_produtos = []
-    st.session_state.start_index = 0
-    st.session_state.termo_anterior = termo
-
-def processar_e_adicionar():
-    palavras_chave = remover_acentos(termo).split()
-    with st.spinner("🔍 Buscando itens..."):
-        raw_data = buscar_nagumo(termo, start=st.session_state.start_index, sz=ITENS_POR_PAGINA)
+def executar_busca():
+    if not st.session_state.termo_atual: return
+    
+    novos_raw = buscar_nagumo(st.session_state.termo_atual, start=st.session_state.offset, sz=ITENS_POR_PAGINA)
+    
+    if novos_raw:
+        palavras_filtro = remover_acentos(st.session_state.termo_atual).split()
+        vistos = {p['sku'] for p in st.session_state.produtos}
         
-        novos_itens = []
-        vistos = {p['sku'] for p in st.session_state.lista_produtos}
-
-        for p in raw_data:
-            sku = p.get('id') or p.get('sku') or str(p.get('productName', ''))
-            nome = p.get('productName') or p.get('name', '')
-            desc = p.get('description', '') or ''
+        for p in novos_raw:
+            sku = p.get('id') or p.get('sku')
+            nome = p.get('productName') or ""
+            desc = p.get('description') or ""
             
-            if sku not in vistos and all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
+            # Filtro básico de relevância
+            if sku not in vistos and all(k in remover_acentos(f"{nome} {desc}") for k in palavras_filtro):
                 vistos.add(sku)
                 
                 preco_obj = p.get('price', {})
                 if isinstance(preco_obj, dict):
                     preco_final = preco_obj.get('sales', {}).get('value', 0)
                 else:
-                    try: preco_final = float(preco_obj or 0)
+                    try: preco_final = float(preco_obj)
                     except: preco_final = 0
                 
                 label = calcular_preco_unitario_nagumo(preco_final, desc, nome)
                 
-                p_processado = {
+                st.session_state.produtos.append({
                     'sku': sku,
-                    'display_name': nome,
-                    'preco_final': preco_final,
-                    'unit_label': label,
+                    'nome': nome,
+                    'preco': preco_final,
+                    'unidade': label,
                     'sort_val': extrair_valor_unitario(label),
-                    'url_final': f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}",
+                    'url': f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}",
                     'raw': p
-                }
-                novos_itens.append(p_processado)
+                })
         
-        st.session_state.lista_produtos.extend(novos_itens)
-        # Ordena a lista global pelo valor unitário
-        st.session_state.lista_produtos.sort(key=lambda x: x['sort_val'])
-        st.session_state.start_index += ITENS_POR_PAGINA
+        st.session_state.offset += ITENS_POR_PAGINA
+        st.session_state.produtos.sort(key=lambda x: x['sort_val'])
+    else:
+        if st.session_state.offset == 0:
+            st.warning("Nenhum produto encontrado.")
 
-# Executa busca inicial se a lista estiver vazia
-if termo and not st.session_state.lista_produtos:
-    processar_e_adicionar()
+# Busca inicial
+if st.session_state.termo_atual and not st.session_state.produtos:
+    executar_busca()
 
-if st.session_state.lista_produtos:
-    _, col_center, _ = st.columns([1, 2, 1])
-
-    with col_center:
+# Renderização
+if st.session_state.produtos:
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
         st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/></p>", unsafe_allow_html=True)
-        st.markdown(f"<p align='center'><small>🔎 Mostrando {len(st.session_state.lista_produtos)} itens.</small></p>", unsafe_allow_html=True)
         
-        for p in st.session_state.lista_produtos:
-            raw = p['raw']
+        for p in st.session_state.produtos:
+            # Lógica de imagem
             img = DEFAULT_IMAGE_URL
+            raw = p['raw']
             items = raw.get('items', [])
+            if items and isinstance(items, list):
+                imgs = items[0].get('images', [])
+                if imgs: img = imgs[0].get('imageUrl', img)
             
-            if isinstance(items, list) and len(items) > 0:
-                first_item_images = items[0].get('images', [])
-                if first_item_images and isinstance(first_item_images, list):
-                    img = first_item_images[0].get('imageUrl', img)
-            elif 'images' in raw and isinstance(raw['images'], list) and len(raw['images']) > 0:
-                img = raw['images'][0] if isinstance(raw['images'][0], str) else raw['images'][0].get('imageUrl', img)
-            elif 'photosUrl' in raw and isinstance(raw['photosUrl'], list) and len(raw['photosUrl']) > 0:
-                img = raw['photosUrl'][0]
-
             st.markdown(f"""
                 <div class='product-container'>
-                    <a href='{p['url_final']}' target='_blank' style='text-decoration:none;'>
-                        <img src="{img}" width="80" style="border-radius: 6px; border: 1px solid #eee; background: white;"/>
-                    </a>
+                    <a href='{p['url']}' target='_blank'><img src="{img}" width="70" style="border-radius:5px; border:1px solid #eee;"/></a>
                     <div class='product-info'>
-                        <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['display_name']}</strong></a><br>
-                        <span style='font-weight: bold; font-size: 1rem !important;'>R$ {p['preco_final']:.2f}</span><br>
-                        <div style="color: #666;">{p['unit_label']}</div>
+                        <strong>{p['nome']}</strong><br>
+                        <span style='font-size:1rem !important; font-weight:bold;'>R$ {p['preco']:.2f}</span><br>
+                        <span style='color:#666;'>{p['unidade']}</span>
                     </div>
                 </div>
-                <hr class='product-separator' />
+                <hr class='product-separator'/>
             """, unsafe_allow_html=True)
 
-        if st.button("🔽 Carregar mais itens"):
-            processar_e_adicionar()
+        if st.button("🔽 Carregar Mais Itens"):
+            executar_busca()
             st.rerun()
 
-    components.html("<script>window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]').forEach(c => c.scrollTop = 0);</script>", height=0)
+components.html("<script>window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]').forEach(c => c.scrollTop = 0);</script>", height=0)
