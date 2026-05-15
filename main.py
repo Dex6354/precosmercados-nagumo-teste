@@ -7,7 +7,7 @@ import re
 # --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
-STORE_ID = "22" 
+STORE_ID = "22"  # 022-CALMON
 
 # --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
@@ -44,19 +44,29 @@ def extrair_valor_unitario(label):
 def buscar_nagumo(term):
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With": "XMLHttpRequest"
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": "https://www.nagumo.com.br/"
     }
 
-    # 1. PASSO CRUCIAL: Setar a loja na sessão do robô
     try:
-        set_store_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Stores-SetStore?storeID={STORE_ID}"
+        # 1. ACESSA A HOME PARA PEGAR COOKIES INICIAIS
+        session.get("https://www.nagumo.com.br/", headers=headers, timeout=10)
+        
+        # 2. FIXA A LOJA 22 NA SESSÃO (Rota baseada no HAR)
+        # O parâmetro 'storeID' e 'pickupStoreID' são essenciais para o Commerce Cloud
+        set_store_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Stores-UpdateSelectedStore?storeID={STORE_ID}&pickupStoreID={STORE_ID}"
         session.get(set_store_url, headers=headers, timeout=10)
+        
+        # 3. FORÇA COOKIES DE CONTROLE
+        session.cookies.set("dw_store", STORE_ID, domain="www.nagumo.com.br")
+        session.cookies.set("hasSelectedStore", STORE_ID, domain="www.nagumo.com.br")
     except:
         pass
 
     all_products = []
+    # Busca start 0 e 20
     for start in [0, 20]:
         start_str = f"{start:02d}"
         url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20"
@@ -94,14 +104,14 @@ if termo:
     termos_busca = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
 
-    with st.spinner("🔍 Sincronizando com a loja 022..."):
+    with st.spinner("🔍 Acessando estoque da loja 022..."):
         raw_nagumo = []
         for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t))
         
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
-            # FILTRO DE DISPONIBILIDADE (ESTRITO)
+            # FILTRO DE DISPONIBILIDADE
             if p.get('available') is not True:
                 continue
             
@@ -153,7 +163,7 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>📍 022-CALMON | 🔎 {len(nagumo_final)} itens encontrados.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>📍 022-CALMON | 🔎 {len(nagumo_final)} itens disponíveis.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
