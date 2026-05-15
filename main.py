@@ -42,7 +42,8 @@ def extrair_info_papel_toalha(nome, descricao):
             return rolos, folhas, rolos * folhas, f"{rolos} {match.group(2)}, {folhas} {match.group(4)}"
     return None, None, None, None
 
-def calcular_preco_unitario_nagumo(preco_valor, descricao, nome, unidade_api=None):
+def calcular_preco_unitario_nagumo(preco_valor, descricao, nome):
+    if not preco_valor: return "Preço indisponível"
     texto_completo = f"{nome} {descricao}".lower()
     if contem_papel_toalha(texto_completo):
         _, _, total_folhas, _ = extrair_info_papel_toalha(nome, descricao)
@@ -52,10 +53,13 @@ def calcular_preco_unitario_nagumo(preco_valor, descricao, nome, unidade_api=Non
     for fonte in fontes:
         m = re.search(r"(\d+[.,]?\d*)\s*(kg|l|g|ml|un)", fonte)
         if m:
-            val = float(m.group(1).replace(',', '.'))
-            uni = m.group(2)
-            if uni == 'kg' or uni == 'l': return f"R$ {preco_valor / val:.2f}/{uni}"
-            if uni == 'g' or uni == 'ml': return f"R$ {preco_valor / (val/1000):.2f}/{'kg' if uni=='g' else 'L'}"
+            try:
+                val = float(m.group(1).replace(',', '.'))
+                uni = m.group(2)
+                if val <= 0: continue
+                if uni in ['kg', 'l']: return f"R$ {preco_valor / val:.2f}/{uni}"
+                if uni in ['g', 'ml']: return f"R$ {preco_valor / (val/1000):.2f}/{'kg' if uni=='g' else 'L'}"
+            except: continue
     return "Sem unidade"
 
 def extrair_valor_unitario(preco_unitario):
@@ -104,27 +108,33 @@ if termo:
         vistos = set()
 
         for p in raw_data:
-            sku = p.get('id') or p.get('sku')
+            sku = p.get('id') or p.get('sku') or str(p.get('productName', ''))
             nome = p.get('productName') or p.get('name', '')
             desc = p.get('description', '') or ''
             
             if sku not in vistos and all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
                 vistos.add(sku)
                 
-                # Mapeamento do Preço no JSON injetado
+                # Extração segura de preço
                 preco_obj = p.get('price', {})
                 if isinstance(preco_obj, dict):
                     preco_final = preco_obj.get('sales', {}).get('value', 0)
                 else:
-                    preco_final = float(preco_obj or 0)
+                    try: preco_final = float(preco_obj or 0)
+                    except: preco_final = 0
                 
-                p['url_final'] = f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}"
                 label = calcular_preco_unitario_nagumo(preco_final, desc, nome)
-                p['unit_label'] = label
-                p['sort_val'] = extrair_valor_unitario(label)
-                p['preco_final'] = preco_final
-                p['display_name'] = nome
-                nagumo_final.append(p)
+                
+                p_processado = {
+                    'sku': sku,
+                    'display_name': nome,
+                    'preco_final': preco_final,
+                    'unit_label': label,
+                    'sort_val': extrair_valor_unitario(label),
+                    'url_final': f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}",
+                    'raw': p
+                }
+                nagumo_final.append(p_processado)
         
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
 
@@ -135,20 +145,32 @@ if termo:
         st.markdown(f"<p align='center'><small>🔎 {len(nagumo_final)} itens encontrados.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
-            # Mapeamento da Imagem
-            imgs = p.get('items', [{}])[0].get('images', []) or p.get('images', [])
-            img = imgs[0].get('imageUrl') if (imgs and isinstance(imgs[0], dict)) else (imgs[0] if imgs else DEFAULT_IMAGE_URL)
+            raw = p['raw']
             
+            # Extração segura de imagem (Corrigindo o KeyError)
+            img = DEFAULT_IMAGE_URL
+            items = raw.get('items', [])
+            
+            if isinstance(items, list) and len(items) > 0:
+                # Tenta pegar do primeiro item da lista de SKUs
+                first_item_images = items[0].get('images', [])
+                if first_item_images and isinstance(first_item_images, list):
+                    img = first_item_images[0].get('imageUrl', img)
+            elif 'images' in raw and isinstance(raw['images'], list) and len(raw['images']) > 0:
+                # Tenta pegar da raiz do produto
+                img = raw['images'][0] if isinstance(raw['images'][0], str) else raw['images'][0].get('imageUrl', img)
+            elif 'photosUrl' in raw and isinstance(raw['photosUrl'], list) and len(raw['photosUrl']) > 0:
+                img = raw['photosUrl'][0]
+
             st.markdown(f"""
                 <div class='product-container'>
                     <a href='{p['url_final']}' target='_blank' style='text-decoration:none;'>
-                        <img src="{img}" width="80" style="border-radius: 6px; border: 1px solid #eee;"/>
+                        <img src="{img}" width="80" style="border-radius: 6px; border: 1px solid #eee; background: white;"/>
                     </a>
                     <div class='product-info'>
                         <a href='{p['url_final']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['display_name']}</strong></a><br>
                         <span style='font-weight: bold; font-size: 1rem !important;'>R$ {p['preco_final']:.2f}</span><br>
                         <div style="color: #666;">{p['unit_label']}</div>
-                        <div style="color: gray; font-size: 0.7rem;">Estoque: {p.get('stock', 'Disponível')}</div>
                     </div>
                 </div>
                 <hr class='product-separator' />
