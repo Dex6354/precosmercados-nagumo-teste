@@ -42,31 +42,38 @@ def extrair_valor_unitario(label):
     match = re.search(r"R\$ (\d+[.,]?\d*)", label)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-# --- REQUISIÇÃO NAGUMO ---
+# --- REQUISIÇÃO NAGUMO DINÂMICA ---
 def buscar_nagumo(term):
     all_products = []
-    # Definindo os cookies para fixar a loja 22
     cookies = {
         "dw_store": ID_LOJA,
         "hasSelectedStore": ID_LOJA,
         "dw_consent": "tracking=false"
     }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
     
-    for start in [0, 20]:
-        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start:02d}&sz=20"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
-            "Accept": "application/json"
-        }
+    # URL inicial
+    current_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start=00&sz=20"
+    
+    while current_url and current_url != "finished":
         try:
-            r = requests.get(url, headers=headers, cookies=cookies, timeout=10)
+            r = requests.get(current_url, headers=headers, cookies=cookies, timeout=10)
             if r.status_code == 200:
                 data = r.json()
                 products = data.get('productsSearchResult', [])
-                if not products: break
-                all_products.extend(products)
-            else: break
-        except: break
+                if products:
+                    all_products.extend(products)
+                
+                # Atualiza para a próxima URL ou encerra se for "finished"
+                current_url = data.get('showMoreUrl')
+            else:
+                break
+        except:
+            break
+            
     return all_products
 
 # --- INTERFACE STREAMLIT ---
@@ -91,34 +98,31 @@ if termo:
     termos_busca = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
 
-    with st.spinner("🔍 Buscando no Nagumo..."):
+    with st.spinner("🔍 Buscando em todas as páginas do Nagumo..."):
         raw_nagumo = []
-        for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t))
+        for t in termos_busca: 
+            raw_nagumo.extend(buscar_nagumo(t))
         
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
             pid = p.get('id')
             
-            # FILTRO: Disponibilidade e Duplicidade
             if pid and pid not in vistos and p.get('available') is True:
                 vistos.add(pid)
                 nome = p.get('productName', '')
                 
                 if all(k in remover_acentos(nome) for k in palavras_chave):
-                    # Preço de Venda
                     price_obj = p.get('price', {}).get('sales', {})
                     try:
                         preco_venda = float(price_obj.get('value', 0))
                     except (TypeError, ValueError):
                         preco_venda = 0.0
 
-                    # Preço "Meu Nagumo"
                     preco_final = preco_venda
                     has_promo = False
                     flags = p.get('flagtypes', [])
                     if flags and isinstance(flags, list):
-                        # Verifica se há o valor promocional nas flags
                         for flag in flags:
                             val_flag = flag.get('valueFlag')
                             if val_flag:
@@ -148,7 +152,7 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis em <b>Loja 22-Calmon</b>.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens encontrados na Loja 22.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
