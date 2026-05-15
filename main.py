@@ -45,7 +45,6 @@ def extrair_valor_unitario(label):
 def buscar_nagumo(term):
     all_products = []
     for start in [0, 20]:
-        # Formata start com 2 dígitos conforme solicitado (00, 20)
         start_str = f"{start:02d}"
         url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20"
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -89,53 +88,58 @@ if termo:
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
-            pid = p.get('id')
+            # 1. BLOQUEIO IMEDIATO DE ITENS INDISPONÍVEIS
+            if p.get('available') is False:
+                continue
             
-            # FILTRO RÍGIDO: Deve ter ID, não ter sido visto e estar explicitamente 'available' como True
-            if pid and pid not in vistos and p.get('available') == True:
+            # 2. BLOQUEIO DE DUPLICADOS E IDS INVÁLIDOS
+            pid = p.get('id')
+            if not pid or pid in vistos:
+                continue
+            
+            nome = p.get('productName', '')
+            # 3. FILTRO DE PALAVRAS-CHAVE
+            if all(k in remover_acentos(nome) for k in palavras_chave):
                 vistos.add(pid)
-                nome = p.get('productName', '')
                 
-                if all(k in remover_acentos(nome) for k in palavras_chave):
-                    # Preço de Venda
-                    price_obj = p.get('price', {}).get('sales', {})
-                    try:
-                        preco_venda = float(price_obj.get('value', 0))
-                    except (TypeError, ValueError):
-                        preco_venda = 0.0
+                # Extração de Preços
+                price_obj = p.get('price', {}).get('sales', {})
+                try:
+                    preco_venda = float(price_obj.get('value', 0))
+                except:
+                    preco_venda = 0.0
 
-                    # Preço "Meu Nagumo"
-                    preco_final = preco_venda
-                    has_promo = False
-                    flags = p.get('flagtypes', [])
-                    if flags and isinstance(flags, list):
-                        val_flag = flags[0].get('valueFlag')
-                        if val_flag:
-                            try:
-                                preco_final = float(val_flag)
-                                has_promo = preco_final < preco_venda
-                            except: pass
+                preco_final = preco_venda
+                has_promo = False
+                flags = p.get('flagtypes', [])
+                if flags and isinstance(flags, list):
+                    val_flag = flags[0].get('valueFlag')
+                    if val_flag:
+                        try:
+                            preco_final = float(val_flag)
+                            has_promo = preco_final < preco_venda
+                        except: pass
 
-                    label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
-                    
-                    p['calc_label'] = label
-                    p['sort_val'] = extrair_valor_unitario(label)
-                    p['preco_final'] = preco_final
-                    p['preco_normal'] = preco_venda
-                    p['has_promo'] = has_promo
-                    
-                    img_data = p.get('images', {}).get('medium', [{}])
-                    p['img_url'] = img_data[0].get('absURL', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL
-                    p['link'] = p.get('productShowFullUrl', '#')
-                    
-                    nagumo_final.append(p)
+                label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
+                
+                p['calc_label'] = label
+                p['sort_val'] = extrair_valor_unitario(label)
+                p['preco_final'] = preco_final
+                p['preco_normal'] = preco_venda
+                p['has_promo'] = has_promo
+                
+                img_data = p.get('images', {}).get('medium', [{}])
+                p['img_url'] = img_data[0].get('absURL', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL
+                p['link'] = p.get('productShowFullUrl', '#')
+                
+                nagumo_final.append(p)
         
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
 
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis em estoque.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
