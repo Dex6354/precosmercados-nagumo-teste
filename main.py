@@ -42,7 +42,7 @@ def extrair_valor_unitario(label):
     match = re.search(r"R\$ (\d+[.,]?\d*)", label)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-# --- REQUISIÇÃO NAGUMO DINÂMICA ---
+# --- REQUISIÇÃO NAGUMO COM PAGINAÇÃO ---
 def buscar_nagumo(term):
     all_products = []
     cookies = {
@@ -55,7 +55,7 @@ def buscar_nagumo(term):
         "Accept": "application/json"
     }
     
-    # URL inicial
+    # URL inicial para a primeira página
     current_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start=00&sz=20"
     
     while current_url and current_url != "finished":
@@ -63,12 +63,15 @@ def buscar_nagumo(term):
             r = requests.get(current_url, headers=headers, cookies=cookies, timeout=10)
             if r.status_code == 200:
                 data = r.json()
+                
+                # Acessa os produtos
                 products = data.get('productsSearchResult', [])
                 if products:
                     all_products.extend(products)
                 
-                # Atualiza para a próxima URL ou encerra se for "finished"
-                current_url = data.get('showMoreUrl')
+                # Acessa a URL da próxima página dentro de productSearch
+                search_info = data.get('productSearch', {})
+                current_url = search_info.get('showMoreUrl')
             else:
                 break
         except:
@@ -98,7 +101,7 @@ if termo:
     termos_busca = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
 
-    with st.spinner("🔍 Buscando em todas as páginas do Nagumo..."):
+    with st.spinner("🔍 Percorrendo todas as páginas do Nagumo..."):
         raw_nagumo = []
         for t in termos_busca: 
             raw_nagumo.extend(buscar_nagumo(t))
@@ -152,7 +155,7 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens encontrados na Loja 22.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis em <b>Loja 22</b>.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
