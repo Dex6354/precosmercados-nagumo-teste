@@ -42,8 +42,10 @@ def extrair_valor_unitario(label):
 # --- REQUISIÇÃO NAGUMO ---
 def buscar_nagumo(term):
     all_products = []
+    # Realiza chamadas com start 00 e 20 conforme solicitado
     for start in [0, 20]:
-        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start:02d}&sz=20"
+        start_str = f"{start:02d}"
+        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20"
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         try:
             r = requests.get(url, headers=headers, timeout=10)
@@ -85,11 +87,16 @@ if termo:
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
-            # --- FILTRO DE DISPONIBILIDADE (CRÍTICO) ---
-            # Se available for False, None ou não existir, ignoramos.
-            if p.get('available') is not True:
+            # --- FILTRO DE DISPONIBILIDADE (Obrigatório) ---
+            # Remove itens com available=False ou que não possuem a chave sales (indisponíveis no JSON)
+            if p.get('available') is False:
                 continue
             
+            price_data = p.get('price', {})
+            sales_obj = price_data.get('sales')
+            if not sales_obj or sales_obj.get('value') is None:
+                continue
+
             pid = p.get('id')
             if not pid or pid in vistos:
                 continue
@@ -98,16 +105,8 @@ if termo:
             if all(k in remover_acentos(nome) for k in palavras_chave):
                 vistos.add(pid)
                 
-                # Extração segura de preço
-                price_data = p.get('price', {})
-                sales_obj = price_data.get('sales')
-                
-                # Se sales for nulo, tenta buscar em list, senão assume 0
-                if sales_obj:
-                    preco_venda = float(sales_obj.get('value', 0))
-                else:
-                    list_obj = price_data.get('list')
-                    preco_venda = float(list_obj.get('value', 0)) if list_obj else 0.0
+                # Extração segura de preço de venda
+                preco_venda = float(sales_obj.get('value', 0))
 
                 preco_final = preco_venda
                 has_promo = False
@@ -122,7 +121,6 @@ if termo:
 
                 label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
                 
-                # Dados para exibição
                 img_list = p.get('images', {}).get('medium', [])
                 img_url = img_list[0].get('absURL', DEFAULT_IMAGE_URL) if img_list else DEFAULT_IMAGE_URL
                 
@@ -143,7 +141,7 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis em estoque.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis filtrados.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
