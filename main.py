@@ -7,6 +7,7 @@ import re
 # --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
+ID_LOJA = "22" # 022-CALMON
 
 # --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
@@ -44,11 +45,21 @@ def extrair_valor_unitario(label):
 # --- REQUISIÇÃO NAGUMO ---
 def buscar_nagumo(term):
     all_products = []
+    # Definindo os cookies para fixar a loja 22
+    cookies = {
+        "dw_store": ID_LOJA,
+        "hasSelectedStore": ID_LOJA,
+        "dw_consent": "tracking=false"
+    }
+    
     for start in [0, 20]:
         url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start:02d}&sz=20"
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
         try:
-            r = requests.get(url, headers=headers, timeout=10)
+            r = requests.get(url, headers=headers, cookies=cookies, timeout=10)
             if r.status_code == 200:
                 data = r.json()
                 products = data.get('productsSearchResult', [])
@@ -73,7 +84,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
+st.markdown("<h6>🛒 Preços Nagumo - Loja 022 Calmon</h6>", unsafe_allow_html=True)
 termo = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
 
 if termo:
@@ -107,12 +118,16 @@ if termo:
                     has_promo = False
                     flags = p.get('flagtypes', [])
                     if flags and isinstance(flags, list):
-                        val_flag = flags[0].get('valueFlag')
-                        if val_flag:
-                            try:
-                                preco_final = float(val_flag)
-                                has_promo = preco_final < preco_venda
-                            except: pass
+                        # Verifica se há o valor promocional nas flags
+                        for flag in flags:
+                            val_flag = flag.get('valueFlag')
+                            if val_flag:
+                                try:
+                                    preco_promo = float(val_flag)
+                                    if preco_promo < preco_final:
+                                        preco_final = preco_promo
+                                        has_promo = True
+                                except: pass
 
                     label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
                     
@@ -133,11 +148,11 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis encontrados.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis em <b>Loja 22-Calmon</b>.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
-            if p['has_promo']:
+            if p['has_promo'] and p['preco_normal'] > p['preco_final']:
                 desc = ((p['preco_normal'] - p['preco_final']) / p['preco_normal']) * 100
                 preco_html += f" <span class='off-tag'>({desc:.0f}% OFF Meu Nagumo)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
 
