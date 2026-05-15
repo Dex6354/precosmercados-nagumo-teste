@@ -19,6 +19,7 @@ def gerar_formas_variantes(termo):
     else: variantes.add(termo + "s")
     return list(variantes)
 
+# --- LÓGICA DE CÁLCULO ---
 def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda):
     texto = remover_acentos(nome.lower())
     match = re.search(r'(\d+[.,]?\d*)\s*(kg|g|l|ml|un)', texto)
@@ -33,52 +34,21 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda):
                 if unid == 'l': return f"R$ {preco_valor / valor:.2f}/L"
                 if unid == 'un': return f"R$ {preco_valor / valor:.2f}/un"
         except: pass
-    return f"R$ {preco_valor:.2f}/un" if medida_venda == "unity" else "---"
+    if medida_venda == "unity": return f"R$ {preco_valor:.2f}/un"
+    return "---"
 
 def extrair_valor_unitario(label):
     match = re.search(r"R\$ (\d+[.,]?\d*)", label)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-# --- SISTEMA DE SESSÃO E DEBUG ---
-def get_nagumo_session():
-    if "nagumo_session" not in st.session_state:
-        st.session_state.nagumo_session = requests.Session()
-        st.session_state.nagumo_session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": "https://www.nagumo.com.br/"
-        })
-    return st.session_state.nagumo_session
-
-def listar_lojas():
-    session = get_nagumo_session()
-    url = "https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Stores-AvailableStores"
-    try:
-        r = session.get(url, timeout=10)
-        # O JSON usa "ID" e "name"
-        return r.json().get('stores', [])
-    except:
-        return []
-
-def selecionar_loja(store_id):
-    session = get_nagumo_session()
-    # Rota para fixar a loja no contexto do site
-    url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Stores-UpdateSelectedStore?storeID={store_id}&pickupStoreID={store_id}"
-    session.get(url, timeout=10)
-    # Garante os cookies na sessão do robô
-    session.cookies.set("dw_store", store_id, domain="www.nagumo.com.br")
-    session.cookies.set("hasSelectedStore", store_id, domain="www.nagumo.com.br")
-
-# --- REQUISIÇÃO DE BUSCA ---
+# --- REQUISIÇÃO NAGUMO ---
 def buscar_nagumo(term):
-    session = get_nagumo_session()
     all_products = []
     for start in [0, 20]:
-        start_str = f"{start:02d}"
-        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20"
+        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start:02d}&sz=20"
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         try:
-            r = session.get(url, timeout=15)
+            r = requests.get(url, headers=headers, timeout=10)
             if r.status_code == 200:
                 data = r.json()
                 products = data.get('productsSearchResult', [])
@@ -89,108 +59,101 @@ def buscar_nagumo(term):
     return all_products
 
 # --- INTERFACE STREAMLIT ---
-st.set_page_config(page_title="Debug Nagumo", page_icon="⚙️", layout="wide")
+st.set_page_config(page_title="Preços Nagumo", page_icon="🛒", layout="wide")
 
 st.markdown("""
     <style>
-        .block-container { padding-top: 1rem; }
+        .block-container { padding-top: 0rem; }
         div, span, strong, small { font-size: 0.75rem !important; }
+        .product-container { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+        .product-info { flex: 1; }
+        .price-tag { font-size: 1rem !important; font-weight: bold; }
+        .off-tag { color: #d32f2f; font-weight: bold; font-size: 0.7rem !important; }
         header[data-testid="stHeader"] { display: none; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- SEÇÃO DE DEBUG ---
-with st.expander("🛠️ CONFIGURAÇÃO DE LOJA (Sessão Ativa)", expanded=True):
-    lojas = listar_lojas()
-    if lojas:
-        # Correção do KeyError: usando l.get('ID') em vez de l['id']
-        opcoes_lojas = {f"{l.get('ID', 'N/D')} - {l.get('name', 'Sem Nome')}": l.get('ID') for l in lojas if l.get('ID')}
-        
-        # Seleciona a loja 22 por padrão
-        default_idx = list(opcoes_lojas.values()).index("22") if "22" in opcoes_lojas.values() else 0
-        
-        loja_selecionada_label = st.selectbox("Selecione a Loja:", list(opcoes_lojas.keys()), index=default_idx)
-        store_id_atual = opcoes_lojas[loja_selecionada_label]
-        
-        if st.button("Aplicar e Fixar Loja"):
-            selecionar_loja(store_id_atual)
-            st.success(f"Loja {store_id_atual} fixada!")
-            st.rerun()
-    else:
-        st.warning("Lista de lojas vazia. Verifique a conexão.")
-        store_id_atual = "22"
-
-# --- BUSCA ---
-termo = st.text_input("🔎 Pesquisar:", "Banana").strip()
+st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
+termo = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
 
 if termo:
     termos_busca = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
 
-    with st.spinner(f"🔍 Buscando na Loja {store_id_atual}..."):
+    with st.spinner("🔍 Buscando no Nagumo..."):
         raw_nagumo = []
         for t in termos_busca: raw_nagumo.extend(buscar_nagumo(t))
         
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
-            if p.get('available') is not True: continue # Filtra indisponíveis
-            
             pid = p.get('id')
-            if not pid or pid in vistos: continue
             
-            price_data = p.get('price', {})
-            sales_obj = price_data.get('sales')
-            if not sales_obj or sales_obj.get('value') is None: continue
-
-            nome = p.get('productName', '')
-            if all(k in remover_acentos(nome) for k in palavras_chave):
+            # FILTRO: Disponibilidade e Duplicidade
+            if pid and pid not in vistos and p.get('available') is True:
                 vistos.add(pid)
-                preco_venda = float(sales_obj.get('value', 0))
-                preco_final = preco_venda
-                has_promo = False
+                nome = p.get('productName', '')
                 
-                flags = p.get('flagtypes', [])
-                if flags and isinstance(flags, list):
-                    val_flag = flags[0].get('valueFlag')
-                    if val_flag:
-                        try:
-                            preco_final = float(val_flag)
-                            has_promo = preco_final < preco_venda
-                        except: pass
+                if all(k in remover_acentos(nome) for k in palavras_chave):
+                    # Preço de Venda
+                    price_obj = p.get('price', {}).get('sales', {})
+                    try:
+                        preco_venda = float(price_obj.get('value', 0))
+                    except (TypeError, ValueError):
+                        preco_venda = 0.0
 
-                label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
-                img_list = p.get('images', {}).get('medium', [])
-                img_url = img_list[0].get('absURL', DEFAULT_IMAGE_URL) if img_list else DEFAULT_IMAGE_URL
-                
-                nagumo_final.append({
-                    'name': nome, 'preco_final': preco_final, 'preco_normal': preco_venda,
-                    'has_promo': has_promo, 'calc_label': label,
-                    'sort_val': extrair_valor_unitario(label), 'img_url': img_url,
-                    'link': p.get('productShowFullUrl', '#')
-                })
+                    # Preço "Meu Nagumo"
+                    preco_final = preco_venda
+                    has_promo = False
+                    flags = p.get('flagtypes', [])
+                    if flags and isinstance(flags, list):
+                        val_flag = flags[0].get('valueFlag')
+                        if val_flag:
+                            try:
+                                preco_final = float(val_flag)
+                                has_promo = preco_final < preco_venda
+                            except: pass
+
+                    label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
+                    
+                    p['calc_label'] = label
+                    p['sort_val'] = extrair_valor_unitario(label)
+                    p['preco_final'] = preco_final
+                    p['preco_normal'] = preco_venda
+                    p['has_promo'] = has_promo
+                    
+                    img_data = p.get('images', {}).get('medium', [{}])
+                    p['img_url'] = img_data[0].get('absURL', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL
+                    p['link'] = p.get('productShowFullUrl', '#')
+                    
+                    nagumo_final.append(p)
         
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
 
     _, col_center, _ = st.columns([1, 2, 1])
+
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>📍 Loja: {store_id_atual} | 🔎 {len(nagumo_final)} itens.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis encontrados.</small></p>", unsafe_allow_html=True)
+        
         for p in nagumo_final:
-            preco_html = f"<span style='font-size: 1rem; font-weight: bold;'>R$ {p['preco_final']:.2f}</span>"
+            preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
             if p['has_promo']:
                 desc = ((p['preco_normal'] - p['preco_final']) / p['preco_normal']) * 100
-                preco_html += f" <span style='color:red; font-weight:bold;'>({desc:.0f}% OFF)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
+                preco_html += f" <span class='off-tag'>({desc:.0f}% OFF Meu Nagumo)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
 
             st.markdown(f"""
-                <div style='display: flex; gap: 10px; margin-bottom: 10px;'>
-                    <a href='{p['link']}' target='_blank'><img src="{p['img_url']}" width="80" style="border-radius:8px; border:1px solid #eee;"/></a>
-                    <div style='flex: 1;'>
-                        <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['name']}</strong></a><br>
+                <div class='product-container'>
+                    <a href='{p['link']}' target='_blank'>
+                        <img src="{p['img_url']}" width="80" style="border-radius:8px; border:1px solid #eee; background: white;"/>
+                    </a>
+                    <div class='product-info'>
+                        <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['productName']}</strong></a><br>
                         {preco_html}<br>
-                        <div style="color: #666;">{p['calc_label']}</div>
+                        <div style="color: #666; margin-top:2px;">{p['calc_label']}</div>
+                        <div style="color: gray; font-size: 0.7rem;">Marca: {p.get('brand', 'N/A')}</div>
                     </div>
                 </div>
                 <hr style='margin:10px 0; border:0; border-top:1px solid #eee;'/>
             """, unsafe_allow_html=True)
 
-components.html("<script>const cols = window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]'); cols.forEach(col => col.scrollTop = 0);</script>", height=0)
+    components.html("<script>const cols = window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]'); cols.forEach(col => col.scrollTop = 0);</script>", height=0)
