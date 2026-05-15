@@ -1,119 +1,98 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import requests
+import json
 import unicodedata
 import re
 
-# --- CONFIGURAÇÕES E CONSTANTES ---
+# --- CONFIGURAÇÕES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
-DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
 
-# --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
     if not texto: return ""
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
 
-def slugify(text):
-    text = remover_acentos(text)
-    text = re.sub(r'[^a-z0-9\s-]', '', text).strip()
-    text = re.sub(r'[-\s]+', '-', text)
-    return text
-
-def calcular_preco_unitario_nagumo(preco_valor, descricao, nome, unidade_api=None):
-    texto_completo = remover_acentos(f"{nome} {descricao}")
-    unidade = str(unidade_api).lower() if unidade_api else ""
-    
-    # Se for quilo (Cenoura, Batata, etc)
-    if "kg" in unidade or "quilo" in texto_completo or "kg" in texto_completo:
-        return f"R$ {preco_valor:.2f}/kg"
-    
-    # Se for unidade
-    if "un" in unidade or "unit" in unidade:
-        return f"R$ {preco_valor:.2f}/un"
-
-    return f"R$ {preco_valor:.2f}"
-
-def buscar_nagumo(term):
+def buscar_raw_nagumo(term):
     url = "https://nextgentheadless.instaleap.io/api/v3"
     headers = {"Content-Type": "application/json", "Origin": "https://www.nagumo.com", "User-Agent": "Mozilla/5.0"}
     payload = {
         "operationName": "SearchProducts",
-        "variables": {"searchProductsInput": {"clientId": "NAGUMO", "storeReference": "22", "currentPage": 1, "pageSize": 50, "search": [{"query": term}], "filters": {}}},
+        "variables": {
+            "searchProductsInput": {
+                "clientId": "NAGUMO",
+                "storeReference": "22", # Verifique se sua loja física é a 22
+                "currentPage": 1,
+                "pageSize": 50,
+                "search": [{"query": term}],
+                "filters": {}
+            }
+        },
         "query": """query SearchProducts($searchProductsInput: SearchProductsInput!) { 
             searchProducts(searchProductsInput: $searchProductsInput) { 
-                products { name price photosUrl sku stock description unit 
-                    promotion { isActive conditions { price } } 
+                products { 
+                    name price photosUrl sku stock description unit 
+                    promotion { isActive conditions { price priceBeforeTaxes } } 
                 } 
             } 
         }"""
     }
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=10)
-        return r.json().get('data', {}).get('searchProducts', {}).get('products', []) or []
-    except: return []
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
 
-# --- INTERFACE ---
-st.set_page_config(page_title="Preços Nagumo", layout="wide")
+# --- INTERFACE DE DEBUG ---
+st.set_page_config(page_title="Nagumo Debugger", layout="wide")
+st.title("🐞 Nagumo API Debugger")
 
-st.markdown("""<style>
-    .block-container { padding-top: 1rem; }
-    div, span, strong { font-size: 0.8rem !important; }
-    .product-container { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #eee; }
-    .img-box { flex: 0 0 60px; position: relative; }
-    .logo-overlay { position: absolute; bottom: 0; right: 0; width: 30px !important; border: 1px solid white; border-radius: 4px; }
-</style>""", unsafe_allow_html=True)
+termo_busca = st.text_input("Termo de busca para teste:", "Cenoura")
 
-termo = st.text_input("🔎 O que você procura hoje?", "Cenoura").strip()
-
-if termo:
-    palavras_chave = remover_acentos(termo).split()
-    with st.spinner("Buscando..."):
-        resultados = buscar_nagumo(termo)
+if st.button("Executar Debug"):
+    raw_data = buscar_raw_nagumo(termo_busca)
+    
+    st.divider()
+    
+    # 1. VISÃO GERAL DOS PRODUTOS ENCONTRADOS
+    products = raw_data.get('data', {}).get('searchProducts', {}).get('products', [])
+    
+    if not products:
+        st.error("A API não retornou NENHUM produto para este termo.")
+        st.json(raw_data)
+    else:
+        st.success(f"A API retornou {len(products)} produtos.")
         
-        final_list = []
-        vistos = set()
+        # Tabela de inspeção rápida
+        debug_list = []
+        for p in products:
+            promo = p.get('promotion') or {}
+            cond = promo.get('conditions') or []
+            
+            debug_list.append({
+                "SKU": p.get('sku'),
+                "Nome": p.get('name'),
+                "Preço Base": p.get('price'),
+                "Promo Ativa": promo.get('isActive'),
+                "Preço Promo": cond[0].get('price') if cond else "N/A",
+                "Estoque": p.get('stock'),
+                "Unidade": p.get('unit')
+            })
+        
+        st.subheader("Lista de Itens (Sem Filtros)")
+        st.table(debug_list)
+        
+        # 2. BUSCA ESPECÍFICA PELO SKU DA CENOURA
+        sku_alvo = "13772"
+        item_alvo = next((p for p in products if str(p.get('sku')) == sku_alvo), None)
+        
+        st.divider()
+        if item_alvo:
+            st.info(f"✅ O item '{sku_alvo}' FOI ENCONTRADO na resposta da API!")
+            st.subheader("Dados Brutos do Item Alvo:")
+            st.json(item_alvo)
+        else:
+            st.warning(f"❌ O SKU {sku_alvo} NÃO ESTÁ na lista acima.")
+            st.write("Verifique se o termo de busca ou o 'storeReference' (Loja) estão corretos.")
 
-        for p in resultados:
-            sku = p.get('sku')
-            if sku and sku not in vistos:
-                vistos.add(sku)
-                nome = p.get('name', '')
-                desc = p.get('description', '') or ""
-                
-                # Captura de Preço (Lógica corrigida para Hortifruti)
-                promo = p.get('promotion') or {}
-                cond = promo.get('conditions') or []
-                preco_api = p.get('price', 0)
-                
-                # Se o preço principal for 0, tenta pegar o preço da condição promocional
-                preco_final = cond[0].get('price') if cond else preco_api
-                
-                # Filtro de palavras-chave no nome e descrição
-                if all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
-                    if preco_final > 0:
-                        p['preco_exibicao'] = preco_final
-                        p['unit_label'] = calcular_preco_unitario_nagumo(preco_final, desc, nome, p.get('unit'))
-                        p['url'] = f"https://www.nagumo.com.br/categoria/departamentos/p/{slugify(nome)}-{sku}.html"
-                        final_list.append(p)
-
-        # Ordenar por preço unitário
-        final_list = sorted(final_list, key=lambda x: x['preco_exibicao'])
-
-    _, col_center, _ = st.columns([1, 2, 1])
-    with col_center:
-        st.markdown(f"**{len(final_list)} produtos encontrados**")
-        for p in final_list:
-            img = p['photosUrl'][0] if p.get('photosUrl') else DEFAULT_IMAGE_URL
-            st.markdown(f"""
-                <div class="product-container">
-                    <div class="img-box">
-                        <img src="{img}" width="60">
-                        <img src="{LOGO_NAGUMO_URL}" class="logo-overlay">
-                    </div>
-                    <div style="flex: 1;">
-                        <a href="{p['url']}" target="_blank" style="text-decoration: none; color: #333;"><strong>{p['name']}</strong></a><br>
-                        <span style="color: #2e7d32; font-weight: bold; font-size: 1rem !important;">R$ {p['preco_exibicao']:.2f}</span>
-                        <span style="color: gray; margin-left: 10px;">({p['unit_label']})</span>
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
+    # 3. JSON COMPLETO PARA ANÁLISE
+    with st.expander("Ver JSON Completo da Resposta"):
+        st.json(raw_data)
