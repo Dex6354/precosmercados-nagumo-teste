@@ -69,10 +69,15 @@ def extrair_valor_unitario(preco_unitario):
 # --- REQUISIÇÃO VIA REGEX ---
 def buscar_nagumo(term):
     term_encoded = requests.utils.quote(term)
+    # Adicionado parâmetro de página para tentar forçar o carregamento de mais itens
     url = f"https://www.nagumo.com.br/busca?q={term_encoded}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "pt-BR,pt;q=0.9"
+    }
     try:
         r = requests.get(url, headers=headers, timeout=10)
+        # O Nagumo pode injetar múltiplos blocos de produtos ou um bloco maior
         match = re.search(r'products="([^"]+)"', r.text)
         if match:
             return json.loads(html.unescape(match.group(1)))
@@ -101,21 +106,27 @@ st.markdown("<h6>🛒 Preços Nagumo</h6>", unsafe_allow_html=True)
 termo = st.text_input("🔎 Digite o nome do produto:", "Banana").strip()
 
 if termo:
+    # Usando o termo original e variantes para ampliar a captura
+    termos_para_tentar = gerar_formas_variantes(remover_acentos(termo))
     palavras_chave = remover_acentos(termo).split()
-    with st.spinner("🔍 Buscando..."):
-        raw_data = buscar_nagumo(termo)
+    
+    with st.spinner("🔍 Buscando lista completa..."):
+        all_raw_data = []
+        for t in termos_para_tentar:
+            all_raw_data.extend(buscar_nagumo(t))
+            
         nagumo_final = []
         vistos = set()
 
-        for p in raw_data:
-            sku = p.get('id') or p.get('sku') or str(p.get('productName', ''))
+        for p in all_raw_data:
+            sku = str(p.get('id') or p.get('sku') or p.get('productName', ''))
             nome = p.get('productName') or p.get('name', '')
             desc = p.get('description', '') or ''
             
+            # Filtro de relevância para manter a precisão
             if sku not in vistos and all(k in remover_acentos(f"{nome} {desc}") for k in palavras_chave):
                 vistos.add(sku)
                 
-                # Extração segura de preço
                 preco_obj = p.get('price', {})
                 if isinstance(preco_obj, dict):
                     preco_final = preco_obj.get('sales', {}).get('value', 0)
@@ -125,7 +136,7 @@ if termo:
                 
                 label = calcular_preco_unitario_nagumo(preco_final, desc, nome)
                 
-                p_processado = {
+                nagumo_final.append({
                     'sku': sku,
                     'display_name': nome,
                     'preco_final': preco_final,
@@ -133,8 +144,7 @@ if termo:
                     'sort_val': extrair_valor_unitario(label),
                     'url_final': f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}",
                     'raw': p
-                }
-                nagumo_final.append(p_processado)
+                })
         
         nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
 
@@ -146,21 +156,16 @@ if termo:
         
         for p in nagumo_final:
             raw = p['raw']
-            
-            # Extração segura de imagem (Corrigindo o KeyError)
             img = DEFAULT_IMAGE_URL
-            items = raw.get('items', [])
             
-            if isinstance(items, list) and len(items) > 0:
-                # Tenta pegar do primeiro item da lista de SKUs
-                first_item_images = items[0].get('images', [])
-                if first_item_images and isinstance(first_item_images, list):
-                    img = first_item_images[0].get('imageUrl', img)
-            elif 'images' in raw and isinstance(raw['images'], list) and len(raw['images']) > 0:
-                # Tenta pegar da raiz do produto
-                img = raw['images'][0] if isinstance(raw['images'][0], str) else raw['images'][0].get('imageUrl', img)
-            elif 'photosUrl' in raw and isinstance(raw['photosUrl'], list) and len(raw['photosUrl']) > 0:
-                img = raw['photosUrl'][0]
+            # Lógica de imagem ultra-segura
+            try:
+                items = raw.get('items', [])
+                if items and isinstance(items, list):
+                    img = items[0].get('images', [{}])[0].get('imageUrl', img)
+                elif raw.get('images'):
+                    img = raw['images'][0] if isinstance(raw['images'][0], str) else raw['images'][0].get('imageUrl', img)
+            except: pass
 
             st.markdown(f"""
                 <div class='product-container'>
