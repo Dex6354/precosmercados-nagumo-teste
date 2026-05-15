@@ -42,7 +42,6 @@ def extrair_valor_unitario(label):
 # --- REQUISIÇÃO NAGUMO ---
 def buscar_nagumo(term):
     all_products = []
-    # Realiza chamadas com start 00 e 20 conforme solicitado
     for start in [0, 20]:
         start_str = f"{start:02d}"
         url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start={start_str}&sz=20"
@@ -87,29 +86,30 @@ if termo:
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
-            # --- FILTRO DE DISPONIBILIDADE (Obrigatório) ---
-            # Remove itens com available=False ou que não possuem a chave sales (indisponíveis no JSON)
-            if p.get('available') is False:
+            # --- FILTRO DE DISPONIBILIDADE (ESTRITO) ---
+            # Se for False ou qualquer coisa diferente de True, pula
+            if p.get('available') is not True:
                 continue
             
+            # Garante que tenha ID e não seja repetido
+            pid = p.get('id')
+            if not pid or pid in vistos:
+                continue
+            
+            # Garante que tenha o objeto de preço de venda (sales) ativo
             price_data = p.get('price', {})
             sales_obj = price_data.get('sales')
             if not sales_obj or sales_obj.get('value') is None:
                 continue
 
-            pid = p.get('id')
-            if not pid or pid in vistos:
-                continue
-            
             nome = p.get('productName', '')
             if all(k in remover_acentos(nome) for k in palavras_chave):
                 vistos.add(pid)
                 
-                # Extração segura de preço de venda
                 preco_venda = float(sales_obj.get('value', 0))
-
                 preco_final = preco_venda
                 has_promo = False
+                
                 flags = p.get('flagtypes', [])
                 if flags and isinstance(flags, list):
                     val_flag = flags[0].get('valueFlag')
@@ -141,7 +141,7 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis filtrados.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
