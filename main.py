@@ -20,16 +20,15 @@ def remover_acentos(texto):
 
 def extrair_preco(texto):
     if not texto: return 0.0
-    match = re.search(r'R\$\s?(\d+,\d{2})', texto)
+    # Limpa espaços e quebras de linha antes de aplicar o regex
+    texto_limpo = texto.replace('\n', ' ').strip()
+    match = re.search(r'R\$\s?(\d+,\d{2})', texto_limpo)
     if match:
         return float(match.group(1).replace(',', '.'))
     return 0.0
 
-def formatar_moeda(valor):
-    return f"R$ {valor:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ',')
-
-# --- SCRAPER NAGUMO ---
-def scrape_nagumo_product(url):
+# --- SCRAPER NAGUMO (LÓGICA DO DEBUGGER) ---
+def scrape_nagumo_item(url):
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
         if response.status_code != 200:
@@ -37,13 +36,13 @@ def scrape_nagumo_product(url):
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Busca o objeto JSON de dados do produto no atributo :product
+        # 1. Tentar extração via componente JSON (Mais preciso para estoque e preços sem promo)
         product_data_element = soup.find('product-detail-quantity')
         if product_data_element and product_data_element.has_attr(':product'):
             data = json.loads(product_data_element[':product'])
             
-            nome = data.get('productName', 'Produto sem nome')
-            # Pega o preço promocional se existir, senão o normal
+            nome = data.get('productName', 'Produto')
+            # Lógica de preço: flagtypes (promoção meunagumo) > sales > list
             preco = data.get('price', {}).get('sales', {}).get('value', 0.0)
             if data.get('flagtypes'):
                  preco = data['flagtypes'][0].get('valueFlag', preco)
@@ -61,61 +60,100 @@ def scrape_nagumo_product(url):
                 "stock": estoque
             }
         
-        # Fallback para extração via HTML caso o JSON não esteja presente
-        nome = soup.find('h1', class_='product-name')
-        nome = nome.text.strip() if nome else "Produto"
+        # 2. Fallback via seletores HTML tradicionais (Para links de busca/listagem)
+        nome_tag = soup.find('h1', class_='product-name') or soup.find('div', class_='product-name')
+        nome = nome_tag.text.strip() if nome_tag else "Produto"
         
-        preco_final = soup.find('span', class_='productNotice-finalPrice')
-        if not preco_final:
-            preco_final = soup.find('span', class_='productPrice__price')
+        # Busca classes de preço variadas encontradas no HAR
+        preco_tag = soup.find('span', class_='productNotice-finalPrice') or \
+                    soup.find('span', class_='productPrice__price') or \
+                    soup.find('span', class_='sales')
         
-        preco = extrair_preco(preco_final.text) if preco_final else 0.0
+        preco = extrair_preco(preco_tag.text) if preco_tag else 0.0
         
-        img_tag = soup.find('img', class_='productDetails__images__principal__img')
-        img = img_tag['src'] if img_tag else DEFAULT_IMAGE_URL
+        img_tag = soup.find('img', class_='productDetails__images__principal__img') or \
+                  soup.find('img', class_='tile-image')
+        img = img_tag['src'] if img_tag and img_tag.has_attr('src') else DEFAULT_IMAGE_URL
         
         return {
             "titulo": nome,
             "preco": preco,
             "img": img,
             "url_final": url,
-            "unit_label": "Consultar",
-            "stock": "Em estoque"
+            "unit_label": "Unidade",
+            "stock": "Disponível"
         }
-    except Exception as e:
-        st.error(f"Erro ao processar {url}: {e}")
+    except Exception:
         return None
 
-# --- INTERFACE STREAMLIT ---
-st.set_page_config(page_title="Monitor Nagumo", layout="wide")
+# --- INTERFACE STREAMLIT (LAYOUT ANTIGO) ---
+st.set_page_config(page_title="Monitor de Preços", layout="wide")
 
-st.title("🛒 Monitor de Itens Nagumo")
-
-# Exemplo de URLs baseadas no seu relato
-urls = [
-    "https://www.nagumo.com.br/categoria/departamentos/hortifruti/frutas/fruta-tradicional/banana-nanica-2004.html",
-    "https://www.nagumo.com.br/categoria/departamentos/hortifruti/legumes/tuberculos/cenoura-13772.html"
-]
-
-if st.button("Atualizar Preços"):
-    cols = st.columns(len(urls))
-    
-    for i, url in enumerate(urls):
-        p = scrape_nagumo_product(url)
-        if p:
-            with cols[i]:
-                st.image(p['img'], width=150)
-                st.subheader(p['titulo'])
-                st.write(f"**Preço:** {formatar_moeda(p['preco'])}")
-                st.write(f"Unidade: {p['unit_label']}")
-                st.write(f"Estoque: {p['stock']}")
-                st.markdown(f"[Ver no site]({p['url_final']})")
-        else:
-            with cols[i]:
-                st.warning(f"Item não encontrado: {url.split('/')[-1]}")
-
+# Estilo CSS original do seu site
 st.markdown("""
 <style>
-    .product-container { border: 1px solid #ddd; padding: 10px; border-radius: 10px; margin-bottom: 10px; }
+    .product-container {
+        display: flex;
+        align-items: center;
+        background-color: #f8f9fa;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid #e0e0e0;
+        margin-bottom: 10px;
+    }
+    .product-image-box {
+        margin-right: 15px;
+        flex-shrink: 0;
+    }
+    .product-info {
+        flex-grow: 1;
+    }
+    .product-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 5px;
+        text-decoration: none;
+    }
+    .product-price {
+        font-size: 18px;
+        font-weight: 700;
+        color: #d50037;
+    }
+    .stock-info {
+        font-size: 11px;
+        color: #777;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+st.title("🔍 Busca de Itens Nagumo")
+
+# Campo de busca ou Lista de URLs (Simulando o comportamento do seu site)
+urls_to_check = [
+    "https://www.nagumo.com.br/categoria/departamentos/hortifruti/frutas/fruta-tradicional/banana-nanica-2004.html",
+    "https://www.nagumo.com.br/categoria/departamentos/hortifruti/legumes/tuberculos/cenoura-13772.html",
+    "https://www.nagumo.com.br/categoria/departamentos/hortifruti/legumes/caules-e-frutos/tomate-italiano-kg-2022.html"
+]
+
+if st.button("Buscar/Atualizar Itens"):
+    for url in urls_to_check:
+        item = scrape_nagumo_item(url)
+        if item:
+            # Layout antigo solicitado
+            st.markdown(f"""
+                <div class="product-container">
+                    <div class="product-image-box">
+                        <a href="{item['url_final']}" target="_blank">
+                            <img src="{item['img']}" width="80" style="border-radius: 4px;">
+                        </a>
+                    </div>
+                    <div class="product-info">
+                        <a href="{item['url_final']}" target="_blank" class="product-title">{item['titulo']}</a><br>
+                        <span class="product-price">R$ {item['preco']:.2f}</span><br>
+                        <span class="stock-info">{item['unit_label']} | Estoque: {item['stock']}</span>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.error(f"Não foi possível carregar o item: {url.split('/')[-1]}")
