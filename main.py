@@ -36,7 +36,6 @@ def calcular_preco_unitario(preco, desc, nome):
 
 def buscar_nagumo(term, page=1):
     term_enc = requests.utils.quote(term)
-    # Tenta buscar páginas específicas para contornar o limite de 20
     url = f"https://www.nagumo.com.br/busca?q={term_enc}&page={page}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
@@ -69,8 +68,8 @@ termo = st.text_input("🔎 Produto:", "Banana").strip()
 
 if termo:
     palavras_chave = remover_acentos(termo).split()
-    with st.spinner("🔍 Buscando múltiplas páginas..."):
-        # Busca página 1 e página 2 para garantir os 24+ itens
+    with st.spinner("🔍 Buscando lista completa..."):
+        # Busca pág 1 e 2 para capturar todos os itens (24+)
         raw_data = buscar_nagumo(termo, page=1) + buscar_nagumo(termo, page=2)
         
         final_list = []
@@ -87,7 +86,6 @@ if termo:
                 
                 label = calcular_preco_unitario(val_final, p.get('description', ''), nome)
                 
-                # Extração de imagem
                 img = DEFAULT_IMAGE_URL
                 try:
                     items = p.get('items', [])
@@ -99,9 +97,11 @@ if termo:
                     'url': f"https://www.nagumo.com.br/p/{sku}/{slugify(nome)}"
                 })
 
-    _, col = st.columns([1, 2, 1])
-    with col:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='80'/><br><small>{len(final_list)} itens</small></p>", unsafe_allow_html=True)
+    # CORREÇÃO: Capturando as 3 colunas para evitar o ValueError
+    col_esq, col_central, col_dir = st.columns([1, 2, 1])
+    
+    with col_central:
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='80'/><br><small>{len(final_list)} itens encontrados</small></p>", unsafe_allow_html=True)
         for p in final_list:
             st.markdown(f"""
                 <div class='product-container'>
