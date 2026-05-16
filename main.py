@@ -55,7 +55,6 @@ def buscar_nagumo(term):
         "Accept": "application/json"
     }
     
-    # URL inicial para a primeira página
     current_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start=00&sz=20"
     
     while current_url and current_url != "finished":
@@ -63,13 +62,9 @@ def buscar_nagumo(term):
             r = requests.get(current_url, headers=headers, cookies=cookies, timeout=10)
             if r.status_code == 200:
                 data = r.json()
-                
-                # Acessa os produtos
                 products = data.get('productsSearchResult', [])
                 if products:
                     all_products.extend(products)
-                
-                # Acessa a URL da próxima página dentro de productSearch
                 search_info = data.get('productSearch', {})
                 current_url = search_info.get('showMoreUrl')
             else:
@@ -144,8 +139,11 @@ if termo:
                     p['preco_normal'] = preco_venda
                     p['has_promo'] = has_promo
                     
-                    img_data = p.get('images', {}).get('medium', [{}])
-                    p['img_url'] = img_data[0].get('absURL', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL
+                    # --- ALTERAÇÃO AQUI: de medium para large e absURL para alt ---
+                    img_data = p.get('images', {}).get('large', [{}])
+                    p['img_url'] = img_data[0].get('alt', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL
+                    # --------------------------------------------------------------
+                    
                     p['link'] = p.get('productShowFullUrl', '#')
                     
                     nagumo_final.append(p)
