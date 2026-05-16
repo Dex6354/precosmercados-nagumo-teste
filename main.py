@@ -134,6 +134,7 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable
     nome_lower = nome.lower()
     nome_norm = remover_acentos(nome_lower)
     
+    # 1. Tratamento específico para Papel Higiênico (/m)
     if "papel higi" in nome_norm:
         m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)', nome_lower)
         if not m_rolos:
@@ -149,9 +150,11 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable
                     return f"R$ {preco_valor / (rolos * metros):.3f}/m".replace('.', ',')
             except: pass
 
+    # 2. Tratamento para itens pesáveis (Hortifruti)
     if is_weighable:
         return f"R$ {preco_valor:.2f}/kg".replace('.', ',')
 
+    # 3. Padrões de Peso/Volume contidos no nome
     match = re.search(r'(\d+[.,]?\d*)\s*(kg|g|l|ml)', nome_lower)
     if match:
         try:
@@ -164,6 +167,7 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable
                 if unid == 'l': return f"R$ {preco_valor / valor:.2f}/L".replace('.', ',')
         except: pass
         
+    # 4. Falback para Unidades explícitas no nome
     match_un = re.search(r'(\d+)\s*(un|unidades?|rolos?)', nome_lower)
     if match_un:
         try:
@@ -171,6 +175,7 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable
             if qtd > 0: return f"R$ {preco_valor / qtd:.2f}/un".replace('.', ',')
         except: pass
 
+    # 5. Fallback padrão da medida da API
     if medida_venda == "unity": 
         return f"R$ {preco_valor:.2f}/un".replace('.', ',')
         
@@ -227,12 +232,25 @@ def buscar_nagumo_turbo_total(termo_usuario):
         if all(k in nome_norm for k in palavras_chave):
             vistos.add(pid)
             
+            # Captura estrita do preço atual do JSON
             sales = p.get('price', {}).get('sales', {})
             preco_final = float(sales.get('value', 0)) if sales.get('value') else 0.0
             
+            # Captura do preço de lista original para controle de promoção
             list_price = p.get('price', {}).get('list')
             preco_normal = float(list_price.get('value', 0)) if (list_price and list_price.get('value')) else preco_final
-            has_promo = (preco_final < preco_normal)
+            
+            # Se houver dados válidos nas flags de desconto estruturado, valida a promoção
+            for flag in p.get('flagtypes', []):
+                if flag.get('valueFlag'):
+                    try:
+                        val_flag = float(flag['valueFlag'])
+                        if val_flag < preco_final and val_flag > 0:
+                            preco_normal = preco_final
+                            preco_final = val_flag
+                    except: pass
+            
+            has_promo = (preco_final < preco_normal and preco_normal > 0)
             
             is_weighable = p.get('weighable', False)
             label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'), is_weighable)
