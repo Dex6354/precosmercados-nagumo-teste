@@ -3,13 +3,14 @@ import streamlit.components.v1 as components
 import requests
 import unicodedata
 import re
+import math
 from concurrent.futures import ThreadPoolExecutor
 
 # --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
 ID_LOJA = "22" 
-MAX_PAGINAS_PARALELO = 6  # Define quantas páginas buscar de uma vez (ex: 0 a 144 itens)
+ITENS_POR_PAGINA = 24
 
 # --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
@@ -37,46 +38,52 @@ def extrair_valor_unitario(label):
     match = re.search(r"R\$ (\d+[.,]?\d*)", label)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-# --- FUNÇÃO DE BUSCA DE PÁGINA ÚNICA ---
-def buscar_pagina_nagumo(url):
+def fetch_api(url):
     cookies = {"dw_store": ID_LOJA, "hasSelectedStore": ID_LOJA}
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
     try:
         r = requests.get(url, headers=headers, cookies=cookies, timeout=10)
         if r.status_code == 200:
-            return r.json().get('productsSearchResult', [])
-    except:
-        pass
-    return []
+            return r.json()
+    except: pass
+    return {}
 
-# --- BUSCA PARALELIZADA ---
-def buscar_nagumo_paralelo(termo_usuario):
+# --- BUSCA PARALELA TOTAL ---
+def buscar_nagumo_turbo_total(termo_usuario):
     palavras_chave = remover_acentos(termo_usuario).split()
     if not palavras_chave: return []
     
     termo_api = palavras_chave[0]
+    
+    # 1. Descobrir o total de itens
+    url_inicial = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start=00&sz={ITENS_POR_PAGINA}"
+    data_inicial = fetch_api(url_inicial)
+    
+    total_count = data_inicial.get('productSearch', {}).get('count', 0)
+    if total_count == 0: return []
+    
+    # 2. Gerar todas as URLs de páginas
+    num_paginas = math.ceil(total_count / ITENS_POR_PAGINA)
     urls = [
-        f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start={i*24:02d}&sz=24"
-        for i in range(MAX_PAGINAS_PARALELO)
+        f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start={i*ITENS_POR_PAGINA:02d}&sz={ITENS_POR_PAGINA}"
+        for i in range(num_paginas)
     ]
     
+    # 3. Buscar tudo em paralelo (Threads limitadas a 10 para não ser bloqueado)
     all_raw_products = []
-    
-    # Executa as requisições em paralelo
-    with ThreadPoolExecutor(max_workers=MAX_PAGINAS_PARALELO) as executor:
-        resultados = list(executor.map(buscar_pagina_nagumo, urls))
-        for lista in resultados:
-            all_raw_products.extend(lista)
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        resultados = list(executor.map(fetch_api, urls))
+        for res in resultados:
+            all_raw_products.extend(res.get('productsSearchResult', []))
             
-    # Processamento e Filtragem (agora local e rápido)
+    # 4. Filtragem e Processamento
     vistos = set()
     final_list = []
     
     for p in all_raw_products:
         pid = p.get('id')
-        if not pid or pid in vistos or not p.get('available'):
-            continue
-            
+        if not pid or pid in vistos or not p.get('available'): continue
+        
         nome = p.get('productName', '')
         nome_norm = remover_acentos(nome)
         
@@ -108,38 +115,36 @@ def buscar_nagumo_paralelo(termo_usuario):
                 'calc_label': label,
                 'sort_val': extrair_valor_unitario(label),
                 'img_url': img_data[0].get('alt', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL,
-                'link': p.get('productShowFullUrl', '#'),
-                'brand': p.get('brand', 'N/A')
+                'link': p.get('productShowFullUrl', '#')
             })
             
     return sorted(final_list, key=lambda x: x['sort_val'])
 
-# --- INTERFACE STREAMLIT ---
-st.set_page_config(page_title="Nagumo Turbo", page_icon="⚡", layout="wide")
+# --- INTERFACE ---
+st.set_page_config(page_title="Nagumo Ultra Fast", layout="wide")
 st.markdown("<style>.block-container { padding-top: 0rem; } header {display: none;} div, span, strong { font-size: 0.75rem !important; } .price-tag { font-size: 1rem !important; font-weight: bold; } .off-tag { color: #d32f2f; font-weight: bold; }</style>", unsafe_allow_html=True)
 
-st.markdown("<h6>⚡ Pesquisa Paralela Nagumo - Loja 22</h6>", unsafe_allow_html=True)
-termo = st.text_input("🔎 O que você procura?", "Leite Integral").strip()
+st.markdown("<h6>🚀 Busca Exaustiva Paralela - Loja 22</h6>", unsafe_allow_html=True)
+termo = st.text_input("🔎 Produto:", "Leite Integral").strip()
 
 if termo:
-    with st.spinner(f"🚀 Buscando em {MAX_PAGINAS_PARALELO} páginas simultaneamente..."):
-        resultados = buscar_nagumo_paralelo(termo)
+    with st.spinner("⚡ Analisando todo o catálogo em tempo recorde..."):
+        resultados = buscar_nagumo_turbo_total(termo)
     
     if resultados:
         _, col, _ = st.columns([1, 2, 1])
         with col:
-            st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='80'/><br><small><b>{len(resultados)}</b> itens encontrados.</small></p>", unsafe_allow_html=True)
+            st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='80'/><br><small><b>{len(resultados)}</b> itens encontrados em todas as páginas.</small></p>", unsafe_allow_html=True)
             for p in resultados:
                 preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
-                if p['has_promo'] and p['preco_normal'] > p['preco_final']:
-                    desc = ((p['preco_normal'] - p['preco_final']) / p['preco_normal']) * 100
-                    preco_html += f" <span class='off-tag'>({desc:.0f}% OFF)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
+                if p['has_promo']:
+                    preco_html += f" <span class='off-tag'>PROMO</span>"
 
                 st.markdown(f"""
-                    <div style="display: flex; gap: 12px; margin-bottom: 10px; align-items: center;">
-                        <a href='{p['link']}' target='_blank'><img src="{p['img_url']}" width="80" style="border-radius:8px; background:white; border:1px solid #eee;"/></a>
+                    <div style="display: flex; gap: 12px; margin-bottom: 10px;">
+                        <img src="{p['img_url']}" width="75" style="border-radius:8px; border:1px solid #eee; background:white;"/>
                         <div style="flex: 1;">
-                            <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['productName']}</strong></a><br>
+                            <strong>{p['productName']}</strong><br>
                             {preco_html}<br>
                             <div style="color: #666;">{p['calc_label']}</div>
                         </div>
@@ -147,6 +152,6 @@ if termo:
                     <hr style='margin:8px 0; border:0; border-top:1px solid #eee;'/>
                 """, unsafe_allow_html=True)
     else:
-        st.warning("Nada encontrado. Tente termos menos específicos.")
+        st.warning("Nenhum item encontrado.")
 
 components.html("<script>window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]').forEach(c => c.scrollTop = 0);</script>", height=0)
