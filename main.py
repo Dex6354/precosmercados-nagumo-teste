@@ -42,25 +42,25 @@ def extrair_valor_unitario(label):
     match = re.search(r"R\$ (\d+[.,]?\d*)", label)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-# --- REQUISIÇÃO NAGUMO COM PAGINAÇÃO ---
+# --- REQUISIÇÃO NAGUMO OTIMIZADA ---
 def buscar_nagumo(term):
     all_products = []
-    cookies = {
-        "dw_store": ID_LOJA,
-        "hasSelectedStore": ID_LOJA,
-        "dw_consent": "tracking=false"
-    }
+    cookies = {"dw_store": ID_LOJA, "hasSelectedStore": ID_LOJA, "dw_consent": "tracking=false"}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
         "Accept": "application/json"
     }
     
-    # Mudança estratégica: busca apenas o primeiro termo na API para maior abrangência
-    current_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start=00&sz=20"
+    # Formata o termo para a URL (substitui espaços por +)
+    term_url = term.replace(" ", "+")
+    current_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term_url}&start=00&sz=24"
     
-    while current_url and current_url != "finished":
+    max_paginas = 5 # Limite para não ficar lento demais
+    paginas_lidas = 0
+
+    while current_url and current_url != "finished" and paginas_lidas < max_paginas:
         try:
-            r = requests.get(current_url, headers=headers, cookies=cookies, timeout=10)
+            r = requests.get(current_url, headers=headers, cookies=cookies, timeout=7)
             if r.status_code == 200:
                 data = r.json()
                 products = data.get('productsSearchResult', [])
@@ -68,10 +68,9 @@ def buscar_nagumo(term):
                     all_products.extend(products)
                 search_info = data.get('productSearch', {})
                 current_url = search_info.get('showMoreUrl')
-            else:
-                break
-        except:
-            break
+                paginas_lidas += 1
+            else: break
+        except: break
             
     return all_products
 
@@ -94,36 +93,27 @@ st.markdown("<h6>🛒 Preços Nagumo - Loja 022 Calmon</h6>", unsafe_allow_html=
 termo_input = st.text_input("🔎 Digite o nome do produto:", "Leite Integral").strip()
 
 if termo_input:
-    # Lógica de Busca Aprimorada:
-    # 1. Separamos as palavras (ex: ['leite', 'integral'])
-    # 2. Buscamos na API apenas pela primeira palavra (que é a categoria principal)
-    # 3. No Python, filtramos para que o nome contenha TODAS as palavras digitadas
     palavras_chave = remover_acentos(termo_input).split()
-    termo_principal = palavras_chave[0] if palavras_chave else ""
-    termos_busca_api = gerar_formas_variantes(termo_principal)
-
-    with st.spinner("🔍 Buscando produtos e aplicando filtros..."):
-        raw_nagumo = []
-        for t in termos_busca_api: 
-            raw_nagumo.extend(buscar_nagumo(t))
+    
+    with st.spinner("⚡ Buscando rapidamente..."):
+        # Buscamos pela string completa tratada para a API ser mais rápida
+        raw_nagumo = buscar_nagumo(remover_acentos(termo_input))
         
         vistos = set()
         nagumo_final = []
         for p in raw_nagumo:
             pid = p.get('id')
-            
             if pid and pid not in vistos and p.get('available') is True:
                 vistos.add(pid)
                 nome_prod = p.get('productName', '')
                 nome_normalizado = remover_acentos(nome_prod)
                 
-                # FILTRO CRÍTICO: O nome do produto deve conter todas as palavras da busca
+                # Validação de segurança: garante que os termos estão no nome
                 if all(k in nome_normalizado for k in palavras_chave):
                     price_obj = p.get('price', {}).get('sales', {})
                     try:
                         preco_venda = float(price_obj.get('value', 0))
-                    except (TypeError, ValueError):
-                        preco_venda = 0.0
+                    except: preco_venda = 0.0
 
                     preco_final = preco_venda
                     has_promo = False
@@ -158,24 +148,21 @@ if termo_input:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens encontrados para '{termo_input}'.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens encontrados.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
             if p['has_promo'] and p['preco_normal'] > p['preco_final']:
                 desc = ((p['preco_normal'] - p['preco_final']) / p['preco_normal']) * 100
-                preco_html += f" <span class='off-tag'>({desc:.0f}% OFF Meu Nagumo)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
+                preco_html += f" <span class='off-tag'>({desc:.0f}% OFF)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
 
             st.markdown(f"""
                 <div class='product-container'>
-                    <a href='{p['link']}' target='_blank'>
-                        <img src="{p['img_url']}" width="80" style="border-radius:8px; border:1px solid #eee; background: white;"/>
-                    </a>
+                    <a href='{p['link']}' target='_blank'><img src="{p['img_url']}" width="80" style="border-radius:8px; background:white;"/></a>
                     <div class='product-info'>
                         <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['productName']}</strong></a><br>
                         {preco_html}<br>
                         <div style="color: #666; margin-top:2px;">{p['calc_label']}</div>
-                        <div style="color: gray; font-size: 0.7rem;">Marca: {p.get('brand', 'N/A')}</div>
                     </div>
                 </div>
                 <hr style='margin:10px 0; border:0; border-top:1px solid #eee;'/>
