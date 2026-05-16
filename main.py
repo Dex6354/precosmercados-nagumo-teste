@@ -55,6 +55,7 @@ def buscar_nagumo(term):
         "Accept": "application/json"
     }
     
+    # Mudança estratégica: busca apenas o primeiro termo na API para maior abrangência
     current_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term}&start=00&sz=20"
     
     while current_url and current_url != "finished":
@@ -90,15 +91,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("<h6>🛒 Preços Nagumo - Loja 022 Calmon</h6>", unsafe_allow_html=True)
-termo = st.text_input("🔎 Digite o nome do produto:", "Cenoura").strip()
+termo_input = st.text_input("🔎 Digite o nome do produto:", "Leite Integral").strip()
 
-if termo:
-    termos_busca = gerar_formas_variantes(remover_acentos(termo))
-    palavras_chave = remover_acentos(termo).split()
+if termo_input:
+    # Lógica de Busca Aprimorada:
+    # 1. Separamos as palavras (ex: ['leite', 'integral'])
+    # 2. Buscamos na API apenas pela primeira palavra (que é a categoria principal)
+    # 3. No Python, filtramos para que o nome contenha TODAS as palavras digitadas
+    palavras_chave = remover_acentos(termo_input).split()
+    termo_principal = palavras_chave[0] if palavras_chave else ""
+    termos_busca_api = gerar_formas_variantes(termo_principal)
 
-    with st.spinner("🔍 Percorrendo todas as páginas do Nagumo..."):
+    with st.spinner("🔍 Buscando produtos e aplicando filtros..."):
         raw_nagumo = []
-        for t in termos_busca: 
+        for t in termos_busca_api: 
             raw_nagumo.extend(buscar_nagumo(t))
         
         vistos = set()
@@ -108,9 +114,11 @@ if termo:
             
             if pid and pid not in vistos and p.get('available') is True:
                 vistos.add(pid)
-                nome = p.get('productName', '')
+                nome_prod = p.get('productName', '')
+                nome_normalizado = remover_acentos(nome_prod)
                 
-                if all(k in remover_acentos(nome) for k in palavras_chave):
+                # FILTRO CRÍTICO: O nome do produto deve conter todas as palavras da busca
+                if all(k in nome_normalizado for k in palavras_chave):
                     price_obj = p.get('price', {}).get('sales', {})
                     try:
                         preco_venda = float(price_obj.get('value', 0))
@@ -131,7 +139,7 @@ if termo:
                                         has_promo = True
                                 except: pass
 
-                    label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
+                    label = calcular_preco_unitario_nagumo(preco_final, nome_prod, p.get('productMeasureValue'))
                     
                     p['calc_label'] = label
                     p['sort_val'] = extrair_valor_unitario(label)
@@ -139,11 +147,8 @@ if termo:
                     p['preco_normal'] = preco_venda
                     p['has_promo'] = has_promo
                     
-                    # --- ALTERAÇÃO AQUI: de medium para large e absURL para alt ---
                     img_data = p.get('images', {}).get('large', [{}])
                     p['img_url'] = img_data[0].get('alt', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL
-                    # --------------------------------------------------------------
-                    
                     p['link'] = p.get('productShowFullUrl', '#')
                     
                     nagumo_final.append(p)
@@ -153,7 +158,7 @@ if termo:
     _, col_center, _ = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens disponíveis em <b>Loja 22</b>.</small></p>", unsafe_allow_html=True)
+        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens encontrados para '{termo_input}'.</small></p>", unsafe_allow_html=True)
         
         for p in nagumo_final:
             preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
