@@ -7,7 +7,7 @@ import re
 # --- CONFIGURAÇÕES E CONSTANTES ---
 LOGO_NAGUMO_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/logo-nagumo2.png"
 DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-imagem.png"
-ID_LOJA = "22" # 022-CALMON
+ID_LOJA = "22" 
 
 # --- FUNÇÕES UTILITÁRIAS ---
 def remover_acentos(texto):
@@ -20,7 +20,6 @@ def gerar_formas_variantes(termo):
     else: variantes.add(termo + "s")
     return list(variantes)
 
-# --- LÓGICA DE CÁLCULO ---
 def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda):
     texto = remover_acentos(nome.lower())
     match = re.search(r'(\d+[.,]?\d*)\s*(kg|g|l|ml|un)', texto)
@@ -42,130 +41,113 @@ def extrair_valor_unitario(label):
     match = re.search(r"R\$ (\d+[.,]?\d*)", label)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-# --- REQUISIÇÃO NAGUMO OTIMIZADA ---
-def buscar_nagumo(term):
-    all_products = []
-    cookies = {"dw_store": ID_LOJA, "hasSelectedStore": ID_LOJA, "dw_consent": "tracking=false"}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
-        "Accept": "application/json"
-    }
+# --- BUSCA INTELIGENTE E RÁPIDA ---
+def buscar_smart_nagumo(termo_completo):
+    palavras = remover_acentos(termo_completo).split()
+    if not palavras: return []
     
-    # Formata o termo para a URL (substitui espaços por +)
-    term_url = term.replace(" ", "+")
-    current_url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={term_url}&start=00&sz=24"
+    # Buscamos apenas pelo primeiro termo para "abrir" a busca na API
+    termo_busca = palavras[0]
+    all_filtered = []
+    vistos = set()
     
-    max_paginas = 5 # Limite para não ficar lento demais
-    paginas_lidas = 0
-
-    while current_url and current_url != "finished" and paginas_lidas < max_paginas:
+    cookies = {"dw_store": ID_LOJA, "hasSelectedStore": ID_LOJA}
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    
+    # Começamos a paginação
+    start = 0
+    step = 24
+    max_tentativas = 4 # Analisar até ~100 itens da API costuma ser suficiente e rápido
+    
+    for _ in range(max_tentativas):
+        url = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_busca}&start={start:02d}&sz={step}"
         try:
-            r = requests.get(current_url, headers=headers, cookies=cookies, timeout=7)
-            if r.status_code == 200:
-                data = r.json()
-                products = data.get('productsSearchResult', [])
-                if products:
-                    all_products.extend(products)
-                search_info = data.get('productSearch', {})
-                current_url = search_info.get('showMoreUrl')
-                paginas_lidas += 1
-            else: break
-        except: break
+            r = requests.get(url, headers=headers, cookies=cookies, timeout=5)
+            if r.status_code != 200: break
             
-    return all_products
-
-# --- INTERFACE STREAMLIT ---
-st.set_page_config(page_title="Preços Nagumo", page_icon="🛒", layout="wide")
-
-st.markdown("""
-    <style>
-        .block-container { padding-top: 0rem; }
-        div, span, strong, small { font-size: 0.75rem !important; }
-        .product-container { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
-        .product-info { flex: 1; }
-        .price-tag { font-size: 1rem !important; font-weight: bold; }
-        .off-tag { color: #d32f2f; font-weight: bold; font-size: 0.7rem !important; }
-        header[data-testid="stHeader"] { display: none; }
-    </style>
-""", unsafe_allow_html=True)
-
-st.markdown("<h6>🛒 Preços Nagumo - Loja 022 Calmon</h6>", unsafe_allow_html=True)
-termo_input = st.text_input("🔎 Digite o nome do produto:", "Leite Integral").strip()
-
-if termo_input:
-    palavras_chave = remover_acentos(termo_input).split()
-    
-    with st.spinner("⚡ Buscando rapidamente..."):
-        # Buscamos pela string completa tratada para a API ser mais rápida
-        raw_nagumo = buscar_nagumo(remover_acentos(termo_input))
-        
-        vistos = set()
-        nagumo_final = []
-        for p in raw_nagumo:
-            pid = p.get('id')
-            if pid and pid not in vistos and p.get('available') is True:
-                vistos.add(pid)
-                nome_prod = p.get('productName', '')
-                nome_normalizado = remover_acentos(nome_prod)
+            data = r.json()
+            products = data.get('productsSearchResult', [])
+            if not products: break
+            
+            for p in products:
+                pid = p.get('id')
+                nome = p.get('productName', '')
+                nome_norm = remover_acentos(nome)
                 
-                # Validação de segurança: garante que os termos estão no nome
-                if all(k in nome_normalizado for k in palavras_chave):
-                    price_obj = p.get('price', {}).get('sales', {})
-                    try:
-                        preco_venda = float(price_obj.get('value', 0))
-                    except: preco_venda = 0.0
-
+                # Filtro rigoroso: todas as palavras da busca devem estar no nome
+                if pid not in vistos and p.get('available') and all(k in nome_norm for k in palavras):
+                    vistos.add(pid)
+                    
+                    # Processamento de preço
+                    sales = p.get('price', {}).get('sales', {})
+                    preco_venda = float(sales.get('value', 0)) if sales.get('value') else 0.0
+                    
                     preco_final = preco_venda
                     has_promo = False
-                    flags = p.get('flagtypes', [])
-                    if flags and isinstance(flags, list):
-                        for flag in flags:
-                            val_flag = flag.get('valueFlag')
-                            if val_flag:
-                                try:
-                                    preco_promo = float(val_flag)
-                                    if preco_promo < preco_final:
-                                        preco_final = preco_promo
-                                        has_promo = True
-                                except: pass
-
-                    label = calcular_preco_unitario_nagumo(preco_final, nome_prod, p.get('productMeasureValue'))
+                    for flag in p.get('flagtypes', []):
+                        if flag.get('valueFlag'):
+                            val = float(flag['valueFlag'])
+                            if val < preco_final:
+                                preco_final = val
+                                has_promo = True
                     
-                    p['calc_label'] = label
-                    p['sort_val'] = extrair_valor_unitario(label)
-                    p['preco_final'] = preco_final
-                    p['preco_normal'] = preco_venda
-                    p['has_promo'] = has_promo
+                    label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
                     
                     img_data = p.get('images', {}).get('large', [{}])
-                    p['img_url'] = img_data[0].get('alt', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL
-                    p['link'] = p.get('productShowFullUrl', '#')
                     
-                    nagumo_final.append(p)
-        
-        nagumo_final = sorted(nagumo_final, key=lambda x: x['sort_val'])
+                    all_filtered.append({
+                        'productName': nome,
+                        'preco_final': preco_final,
+                        'preco_normal': preco_venda,
+                        'has_promo': has_promo,
+                        'calc_label': label,
+                        'sort_val': extrair_valor_unitario(label),
+                        'img_url': img_data[0].get('alt', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL,
+                        'link': p.get('productShowFullUrl', '#'),
+                        'brand': p.get('brand', 'N/A')
+                    })
+            
+            # Se já achamos bastante coisa, não precisa continuar paginando
+            if len(all_filtered) >= 12: break
+            
+            start += step
+        except: break
+            
+    return sorted(all_filtered, key=lambda x: x['sort_val'])
 
-    _, col_center, _ = st.columns([1, 2, 1])
+# --- INTERFACE ---
+st.set_page_config(page_title="Preços Nagumo", page_icon="🛒", layout="wide")
+st.markdown("<style>.block-container { padding-top: 0rem; } header {display: none;} div, span, strong { font-size: 0.75rem !important; } .price-tag { font-size: 1rem !important; font-weight: bold; } .off-tag { color: #d32f2f; font-weight: bold; }</style>", unsafe_allow_html=True)
 
-    with col_center:
-        st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='100'/><br><small>🔎 {len(nagumo_final)} itens encontrados.</small></p>", unsafe_allow_html=True)
-        
-        for p in nagumo_final:
-            preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
-            if p['has_promo'] and p['preco_normal'] > p['preco_final']:
-                desc = ((p['preco_normal'] - p['preco_final']) / p['preco_normal']) * 100
-                preco_html += f" <span class='off-tag'>({desc:.0f}% OFF)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
+st.markdown("<h6>🛒 Preços Nagumo - Loja 22</h6>", unsafe_allow_html=True)
+termo = st.text_input("🔎 Produto:", "Leite Integral").strip()
 
-            st.markdown(f"""
-                <div class='product-container'>
-                    <a href='{p['link']}' target='_blank'><img src="{p['img_url']}" width="80" style="border-radius:8px; background:white;"/></a>
-                    <div class='product-info'>
-                        <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['productName']}</strong></a><br>
-                        {preco_html}<br>
-                        <div style="color: #666; margin-top:2px;">{p['calc_label']}</div>
+if termo:
+    with st.spinner("⚡ Localizando ofertas..."):
+        resultados = buscar_smart_nagumo(termo)
+    
+    if resultados:
+        _, col, _ = st.columns([1, 2, 1])
+        with col:
+            st.markdown(f"<p align='center'><img src='{LOGO_NAGUMO_URL}' width='80'/><br><small>{len(resultados)} produtos encontrados.</small></p>", unsafe_allow_html=True)
+            for p in resultados:
+                preco_html = f"<span class='price-tag'>R$ {p['preco_final']:.2f}</span>"
+                if p['has_promo'] and p['preco_normal'] > p['preco_final']:
+                    desc = ((p['preco_normal'] - p['preco_final']) / p['preco_normal']) * 100
+                    preco_html += f" <span class='off-tag'>({desc:.0f}% OFF)</span><br><span style='text-decoration:line-through; color:gray;'>R$ {p['preco_normal']:.2f}</span>"
+
+                st.markdown(f"""
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <a href='{p['link']}' target='_blank'><img src="{p['img_url']}" width="70" style="border-radius:5px; background:white;"/></a>
+                        <div style="flex: 1;">
+                            <a href='{p['link']}' target='_blank' style='text-decoration:none; color:black;'><strong>{p['productName']}</strong></a><br>
+                            {preco_html}<br>
+                            <div style="color: #666;">{p['calc_label']}</div>
+                        </div>
                     </div>
-                </div>
-                <hr style='margin:10px 0; border:0; border-top:1px solid #eee;'/>
-            """, unsafe_allow_html=True)
+                    <hr style='margin:8px 0; border:0; border-top:1px solid #eee;'/>
+                """, unsafe_allow_html=True)
+    else:
+        st.warning("Nenhum produto encontrado com todos esses termos.")
 
-    components.html("<script>const cols = window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]'); cols.forEach(col => col.scrollTop = 0);</script>", height=0)
+components.html("<script>window.parent.document.querySelectorAll('[data-testid=\"stColumn\"]').forEach(c => c.scrollTop = 0);</script>", height=0)
