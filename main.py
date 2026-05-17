@@ -130,55 +130,21 @@ def extrair_info_papel_toalha(nome, descricao):
     if m_un: return None, None, int(m_un.group(1)), f"{m_un.group(1)} unidades"
     return None, None, None, None
 
-def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable=False):
-    nome_lower = nome.lower()
-    nome_norm = remover_acentos(nome_lower)
-    
-    # 1. Tratamento específico para Papel Higiênico (/m)
-    if "papel higi" in nome_norm:
-        m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)', nome_lower)
-        if not m_rolos:
-            m_rolos = re.search(r'(?:leve|pague|c/|com)\s*(\d+)', nome_lower)
-            
-        m_metros = re.search(r'(\d+[.,]?\d*)\s*(?:m|metros?)', nome_lower)
-        
-        if m_rolos and m_metros:
-            try:
-                rolos = float(m_rolos.group(1))
-                metros = float(m_metros.group(1).replace(',', '.'))
-                if rolos > 0 and metros > 0:
-                    return f"R$ {preco_valor / (rolos * metros):.3f}/m".replace('.', ',')
-            except: pass
-
-    # 2. Tratamento para itens pesáveis (Hortifruti)
-    if is_weighable:
-        return f"R$ {preco_valor:.2f}/kg".replace('.', ',')
-
-    # 3. Padrões de Peso/Volume contidos no nome
-    match = re.search(r'(\d+[.,]?\d*)\s*(kg|g|l|ml)', nome_lower)
+def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda):
+    texto = remover_acentos(nome.lower())
+    match = re.search(r'(\d+[.,]?\d*)\s*(kg|g|l|ml|un)', texto)
     if match:
         try:
             valor = float(match.group(1).replace(',', '.'))
             unid = match.group(2)
             if valor > 0:
-                if unid == 'g': return f"R$ {preco_valor / (valor/1000):.2f}/kg".replace('.', ',')
-                if unid == 'kg': return f"R$ {preco_valor / valor:.2f}/kg".replace('.', ',')
-                if unid == 'ml': return f"R$ {preco_valor / (valor/1000):.2f}/L".replace('.', ',')
-                if unid == 'l': return f"R$ {preco_valor / valor:.2f}/L".replace('.', ',')
+                if unid == 'g': return f"R$ {preco_valor / (valor/1000):.2f}/kg"
+                if unid == 'kg': return f"R$ {preco_valor / valor:.2f}/kg"
+                if unid == 'ml': return f"R$ {preco_valor / (valor/1000):.2f}/L"
+                if unid == 'l': return f"R$ {preco_valor / valor:.2f}/L"
+                if unid == 'un': return f"R$ {preco_valor / valor:.2f}/un"
         except: pass
-        
-    # 4. Falback para Unidades explícitas no nome
-    match_un = re.search(r'(\d+)\s*(un|unidades?|rolos?)', nome_lower)
-    if match_un:
-        try:
-            qtd = float(match_un.group(1))
-            if qtd > 0: return f"R$ {preco_valor / qtd:.2f}/un".replace('.', ',')
-        except: pass
-
-    # 5. Fallback padrão da medida da API
-    if medida_venda == "unity": 
-        return f"R$ {preco_valor:.2f}/un".replace('.', ',')
-        
+    if medida_venda == "unity": return f"R$ {preco_valor:.2f}/un"
     return "---"
 
 def extrair_valor_unitario(label):
@@ -201,24 +167,28 @@ def buscar_nagumo_turbo_total(termo_usuario):
     
     termo_api = palavras_chave[0]
     
+    # 1. Descobrir o total de itens
     url_inicial = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start=00&sz={ITENS_POR_PAGINA}"
     data_inicial = fetch_api_nagumo(url_inicial)
     
     total_count = data_inicial.get('productSearch', {}).get('count', 0)
     if total_count == 0: return []
     
+    # 2. Gerar todas as URLs de páginas
     num_paginas = math.ceil(total_count / ITENS_POR_PAGINA)
     urls = [
         f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start={i*ITENS_POR_PAGINA:02d}&sz={ITENS_POR_PAGINA}"
         for i in range(num_paginas)
     ]
     
+    # 3. Buscar tudo em paralelo
     all_raw_products = []
     with ThreadPoolExecutor(max_workers=10) as executor:
         resultados = list(executor.map(fetch_api_nagumo, urls))
         for res in resultados:
             all_raw_products.extend(res.get('productsSearchResult', []))
             
+    # 4. Filtragem e Processamento
     vistos = set()
     final_list = []
     
@@ -233,29 +203,20 @@ def buscar_nagumo_turbo_total(termo_usuario):
             vistos.add(pid)
             
             sales = p.get('price', {}).get('sales', {})
-            preco_json = float(sales.get('value', 0)) if sales.get('value') else 0.0
+            preco_normal = float(sales.get('value', 0)) if sales.get('value') else 0.0
+            preco_final = preco_normal
+            has_promo = False
             
-            precos_encontrados = [preco_json]
             for flag in p.get('flagtypes', []):
                 if flag.get('valueFlag'):
                     try:
-                        precos_encontrados.append(float(flag['valueFlag']))
+                        val = float(flag['valueFlag'])
+                        if val < preco_final:
+                            preco_final = val
+                            has_promo = True
                     except: pass
             
-            precos_encontrados = [v for v in precos_encontrados if v > 0]
-            
-            if precos_encontrados:
-                preco_final = min(precos_encontrados)
-                preco_normal = max(precos_encontrados)
-                has_promo = (preco_final < preco_normal)
-            else:
-                preco_final = 0.0
-                preco_normal = 0.0
-                has_promo = False
-            
-            # Pega o status pesável direto do JSON
-            is_weighable = p.get('weighable', False)
-            label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'), is_weighable)
+            label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'))
             img_data = p.get('images', {}).get('large', [{}])
             
             final_list.append({
@@ -345,6 +306,7 @@ if termo:
                     p['preco_str'] = formatar_preco_shibata(preco_final, p.get('quantidade_unidade_diferente'), unidade_sigla)
                     p['preco_final'] = preco_final
                     
+                    # Lógica de ordenação (sort_val) baseada na unidade ou folha
                     val_metro, _ = calcular_precos_papel(desc, preco_final)
                     _, val_folha = calcular_preco_papel_toalha(desc, preco_final)
                     val_unidade, _ = calcular_preco_unidade(desc, preco_final)
@@ -479,7 +441,7 @@ if termo:
                     <div style="flex: 1; word-break: break-word; overflow-wrap: anywhere;">
                         <a href='{p['link']}' target='_blank' style='text-decoration:none; color:inherit;'><strong>{titulo}</strong></a><br>
                         <strong>{preco_html}</strong><br>
-                        <div style="margin-top: 4px; font-size: 0.85em; color: gray;">{p['calc_label']}</div>
+                        <div style="margin-top: 4px; font-size: 0.9em; color: #666;">{p['calc_label']}</div>
                     </div>
                 </div>
                 <hr class='product-separator' />
