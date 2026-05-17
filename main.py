@@ -475,4 +475,27 @@ if termo:
 
             st.markdown(f"""
                 <div style="display: flex; align-items: flex-start; gap: 10px; margin-bottom: 0rem; flex-wrap: wrap;">
-                    <a href='
+                    <a href='{p['link']}' target='_blank' style='flex: 0 0 auto; text-decoration:none;'>
+                        <img src="{img}" width="80" style="background-color: white; border-top-left-radius: 6px; border-top-right-radius: 6px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; display: block;"/>
+                        <img src="{LOGO_NAGUMO_URL}" width="80" style="border-top-left-radius: 0; border-top-right-radius: 0; border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; border: 1.5px solid white; padding: 0px; display: block;"/>
+                    </a>
+                    <div style="flex: 1; word-break: break-word; overflow-wrap: anywhere;">
+                        <a href='{p['link']}' target='_blank' style='text-decoration:none; color:inherit;'><strong>{titulo}</strong></a><br>
+                        <strong>{preco_html}</strong><br>
+                        <div style="margin-top: 4px; font-size: 0.85em; color: gray;">{p['calc_label']}</div>
+                    </div>
+                </div>
+                <hr class='product-separator' />
+            """, unsafe_allow_html=True)
+
+    # --- FORÇAR ROLAGEM PARA O TOPO ---
+    components.html(
+        f"""
+        <script>
+            const cols = window.parent.document.querySelectorAll('[data-testid="stColumn"]');
+            cols.forEach(col => col.scrollTop = 0);
+        </script>
+        """,
+        height=0,
+        width=0
+    )
