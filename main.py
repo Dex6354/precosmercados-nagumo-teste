@@ -24,6 +24,9 @@ DEFAULT_IMAGE_URL = "https://rawcdn.githack.com/gymbr/precosmercados/main/sem-im
 ID_LOJA = "22" 
 ITENS_POR_PAGINA = 24
 
+# Criamos uma sessão global do requests para manter e validar os cookies do servidor
+NAGUMO_SESSION = requests.Session()
+
 # --- FUNÇÕES UTILITÁRIAS COMUNS ---
 def remover_acentos(texto):
     if not texto: return ""
@@ -180,14 +183,29 @@ def extrair_valor_unitario(label):
     match = re.search(r"R\$ (\d+[.,]?\d*)", label)
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
-def fetch_api_nagumo(url):
-    # DADOS DOS COOKIES CORRIGIDOS E AMPLIADOS PARA FORÇAR A LOJA 22
-    cookies = {
+def inicializar_sessao_nagumo():
+    """Garante que a sessão inicial no HTML público exista antes das requisições AJAX paralelas"""
+    url_inicializacao = f"https://www.nagumo.com.br/busca?q=Cenoura&idLoja={ID_LOJA}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    cookies_fixos = {
         "dw_store": ID_LOJA,
         "hasSelectedStore": ID_LOJA,
         "selectedStore": ID_LOJA,
-        "meunagumo_store": ID_LOJA,
-        "dwsid": "session-forced-context"
+        "meunagumo_store": ID_LOJA
+    }
+    try:
+        # Faz uma chamada simples para gerar e estabelecer os cookies de sessão internos (dwsid, sid, etc.)
+        NAGUMO_SESSION.get(url_inicializacao, headers=headers, cookies=cookies_fixos, timeout=8)
+    except: pass
+
+def fetch_api_nagumo(url):
+    cookies_fixos = {
+        "dw_store": ID_LOJA,
+        "hasSelectedStore": ID_LOJA,
+        "selectedStore": ID_LOJA,
+        "meunagumo_store": ID_LOJA
     }
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -196,7 +214,8 @@ def fetch_api_nagumo(url):
         "Referer": "https://www.nagumo.com.br/"
     }
     try:
-        r = requests.get(url, headers=headers, cookies=cookies, timeout=10)
+        # Usamos o objeto de sessão persistente para herdar os tokens gerados
+        r = NAGUMO_SESSION.get(url, headers=headers, cookies=cookies_fixos, timeout=10)
         if r.status_code == 200:
             return r.json()
     except: pass
@@ -208,7 +227,9 @@ def buscar_nagumo_turbo_total(termo_usuario):
     
     termo_api = palavras_chave[0]
     
-    # Adicionado o parâmetro idLoja=22 diretamente na URL para blindar o contexto caso o cookie falhe
+    # Executa a simulação do acesso inicial para forçar a criação da sessão correta no servidor deles
+    inicializar_sessao_nagumo()
+    
     url_inicial = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start=00&sz={ITENS_POR_PAGINA}&idLoja={ID_LOJA}"
     data_inicial = fetch_api_nagumo(url_inicial)
     
