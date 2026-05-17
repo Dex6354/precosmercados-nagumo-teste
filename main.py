@@ -134,7 +134,6 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable
     nome_lower = nome.lower()
     nome_norm = remover_acentos(nome_lower)
     
-    # 1. Tratamento específico para Papel Higiênico (/m)
     if "papel higi" in nome_norm:
         m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)', nome_lower)
         if not m_rolos:
@@ -150,11 +149,9 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable
                     return f"R$ {preco_valor / (rolos * metros):.3f}/m".replace('.', ',')
             except: pass
 
-    # 2. Tratamento para itens pesáveis (Hortifruti)
     if is_weighable:
         return f"R$ {preco_valor:.2f}/kg".replace('.', ',')
 
-    # 3. Padrões de Peso/Volume contidos no nome
     match = re.search(r'(\d+[.,]?\d*)\s*(kg|g|l|ml)', nome_lower)
     if match:
         try:
@@ -167,7 +164,6 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable
                 if unid == 'l': return f"R$ {preco_valor / valor:.2f}/L".replace('.', ',')
         except: pass
         
-    # 4. Falback para Unidades explícitas no nome
     match_un = re.search(r'(\d+)\s*(un|unidades?|rolos?)', nome_lower)
     if match_un:
         try:
@@ -175,7 +171,6 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable
             if qtd > 0: return f"R$ {preco_valor / qtd:.2f}/un".replace('.', ',')
         except: pass
 
-    # 5. Fallback padrão da medida da API
     if medida_venda == "unity": 
         return f"R$ {preco_valor:.2f}/un".replace('.', ',')
         
@@ -186,8 +181,20 @@ def extrair_valor_unitario(label):
     return float(match.group(1).replace(',', '.')) if match else float('inf')
 
 def fetch_api_nagumo(url):
-    cookies = {"dw_store": ID_LOJA, "hasSelectedStore": ID_LOJA}
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    # DADOS DOS COOKIES CORRIGIDOS E AMPLIADOS PARA FORÇAR A LOJA 22
+    cookies = {
+        "dw_store": ID_LOJA,
+        "hasSelectedStore": ID_LOJA,
+        "selectedStore": ID_LOJA,
+        "meunagumo_store": ID_LOJA,
+        "dwsid": "session-forced-context"
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": "https://www.nagumo.com.br/"
+    }
     try:
         r = requests.get(url, headers=headers, cookies=cookies, timeout=10)
         if r.status_code == 200:
@@ -201,7 +208,8 @@ def buscar_nagumo_turbo_total(termo_usuario):
     
     termo_api = palavras_chave[0]
     
-    url_inicial = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start=00&sz={ITENS_POR_PAGINA}"
+    # Adicionado o parâmetro idLoja=22 diretamente na URL para blindar o contexto caso o cookie falhe
+    url_inicial = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start=00&sz={ITENS_POR_PAGINA}&idLoja={ID_LOJA}"
     data_inicial = fetch_api_nagumo(url_inicial)
     
     total_count = data_inicial.get('productSearch', {}).get('count', 0)
@@ -209,7 +217,7 @@ def buscar_nagumo_turbo_total(termo_usuario):
     
     num_paginas = math.ceil(total_count / ITENS_POR_PAGINA)
     urls = [
-        f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start={i*ITENS_POR_PAGINA:02d}&sz={ITENS_POR_PAGINA}"
+        f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start={i*ITENS_POR_PAGINA:02d}&sz={ITENS_POR_PAGINA}&idLoja={ID_LOJA}"
         for i in range(num_paginas)
     ]
     
@@ -233,27 +241,22 @@ def buscar_nagumo_turbo_total(termo_usuario):
             vistos.add(pid)
             
             sales = p.get('price', {}).get('sales', {})
-            preco_json = float(sales.get('value', 0)) if sales.get('value') else 0.0
+            preco_final = float(sales.get('value', 0)) if sales.get('value') else 0.0
             
-            precos_encontrados = [preco_json]
+            list_price = p.get('price', {}).get('list')
+            preco_normal = float(list_price.get('value', 0)) if (list_price and list_price.get('value')) else preco_final
+            
             for flag in p.get('flagtypes', []):
                 if flag.get('valueFlag'):
                     try:
-                        precos_encontrados.append(float(flag['valueFlag']))
+                        val_flag = float(flag['valueFlag'])
+                        if val_flag < preco_final and val_flag > 0:
+                            preco_normal = preco_final
+                            preco_final = val_flag
                     except: pass
             
-            precos_encontrados = [v for v in precos_encontrados if v > 0]
+            has_promo = (preco_final < preco_normal and preco_normal > 0)
             
-            if precos_encontrados:
-                preco_final = min(precos_encontrados)
-                preco_normal = max(precos_encontrados)
-                has_promo = (preco_final < preco_normal)
-            else:
-                preco_final = 0.0
-                preco_normal = 0.0
-                has_promo = False
-            
-            # Pega o status pesável direto do JSON
             is_weighable = p.get('weighable', False)
             label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'), is_weighable)
             img_data = p.get('images', {}).get('large', [{}])
@@ -472,27 +475,4 @@ if termo:
 
             st.markdown(f"""
                 <div style="display: flex; align-items: flex-start; gap: 10px; margin-bottom: 0rem; flex-wrap: wrap;">
-                    <a href='{p['link']}' target='_blank' style='flex: 0 0 auto; text-decoration:none;'>
-                        <img src="{img}" width="80" style="background-color: white; border-top-left-radius: 6px; border-top-right-radius: 6px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; display: block;"/>
-                        <img src="{LOGO_NAGUMO_URL}" width="80" style="border-top-left-radius: 0; border-top-right-radius: 0; border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; border: 1.5px solid white; padding: 0px; display: block;"/>
-                    </a>
-                    <div style="flex: 1; word-break: break-word; overflow-wrap: anywhere;">
-                        <a href='{p['link']}' target='_blank' style='text-decoration:none; color:inherit;'><strong>{titulo}</strong></a><br>
-                        <strong>{preco_html}</strong><br>
-                        <div style="margin-top: 4px; font-size: 0.85em; color: gray;">{p['calc_label']}</div>
-                    </div>
-                </div>
-                <hr class='product-separator' />
-            """, unsafe_allow_html=True)
-
-    # --- FORÇAR ROLAGEM PARA O TOPO ---
-    components.html(
-        f"""
-        <script>
-            const cols = window.parent.document.querySelectorAll('[data-testid="stColumn"]');
-            cols.forEach(col => col.scrollTop = 0);
-        </script>
-        """,
-        height=0,
-        width=0
-    )
+                    <a href='
