@@ -142,7 +142,7 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, descricao, medida_venda, i
             r, m = None, None
             m_rolos = re.search(r'\bleve\s*(\d+)', texto)
             if not m_rolos:
-                m_rolos = re.search(r'\bl(\d+)\s*p\d+', texto)
+                m_rolos = re.search(r'\bl\s*(\d+)\s*p\s*\d+', texto)
             if not m_rolos:
                 m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)\b', texto)
             if not m_rolos:
@@ -150,7 +150,7 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, descricao, medida_venda, i
             if m_rolos:
                 r = float(m_rolos.group(1))
                 
-            m_metros = re.search(r'(\d+[.,]?\d*)\s*(?:m|metros?)\b', texto)
+            m_metros = re.search(r'(\d+[.,]?\d*)\s*(m|metros?|mts?)(?!\w)', texto)
             if m_metros:
                 m = float(m_metros.group(1).replace(',', '.'))
             return r, m
