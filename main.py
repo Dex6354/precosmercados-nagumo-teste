@@ -133,34 +133,33 @@ def extrair_info_papel_toalha(nome, descricao):
     if m_un: return None, None, int(m_un.group(1)), f"{m_un.group(1)} unidades"
     return None, None, None, None
 
+def extrair_rolos_metros_nagumo(texto):
+    r, m = None, None
+    m_rolos = re.search(r'\bleve\s*(\d+)', texto)
+    if not m_rolos:
+        m_rolos = re.search(r'\bl\s*(\d+)\s*p\s*\d+', texto)
+    if not m_rolos:
+        m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)\b', texto)
+    if not m_rolos:
+        m_rolos = re.search(r'(?:c/|com)\s*(\d+)', texto)
+    if m_rolos:
+        r = float(m_rolos.group(1))
+        
+    m_metros = re.search(r'(\d+[.,]?\d*)\s*(m|metros?|mts?)(?!\w)', texto)
+    if m_metros:
+        m = float(m_metros.group(1).replace(',', '.'))
+    return r, m
+
 def calcular_preco_unitario_nagumo(preco_valor, nome, descricao, medida_venda, is_weighable=False):
     nome_lower = nome.lower()
     nome_norm = remover_acentos(nome_lower)
     
     if "papel higi" in nome_norm:
-        def extrair_rolos_metros(texto):
-            r, m = None, None
-            m_rolos = re.search(r'\bleve\s*(\d+)', texto)
-            if not m_rolos:
-                m_rolos = re.search(r'\bl\s*(\d+)\s*p\s*\d+', texto)
-            if not m_rolos:
-                m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)\b', texto)
-            if not m_rolos:
-                m_rolos = re.search(r'(?:c/|com)\s*(\d+)', texto)
-            if m_rolos:
-                r = float(m_rolos.group(1))
-                
-            m_metros = re.search(r'(\d+[.,]?\d*)\s*(m|metros?|mts?)(?!\w)', texto)
-            if m_metros:
-                m = float(m_metros.group(1).replace(',', '.'))
-            return r, m
-
-        rolos, metros = extrair_rolos_metros(nome_lower)
+        rolos, metros = extrair_rolos_metros_nagumo(nome_lower)
         
-        # Só consulta a descrição se faltar alguma informação no título
         if (not rolos or not metros) and descricao:
             desc_lower = descricao.lower()
-            r_desc, m_desc = extrair_rolos_metros(desc_lower)
+            r_desc, m_desc = extrair_rolos_metros_nagumo(desc_lower)
             if not rolos and r_desc: rolos = r_desc
             if not metros and m_desc: metros = m_desc
 
@@ -229,12 +228,20 @@ def fetch_api_nagumo(url):
         "Referer": "https://www.nagumo.com.br/"
     }
     try:
-        # Usamos o objeto de sessão persistente para herdar os tokens gerados
         r = NAGUMO_SESSION.get(url, headers=headers, cookies=cookies_fixos, timeout=10)
         if r.status_code == 200:
             return r.json()
     except: pass
     return {}
+
+def buscar_descricao_individual_nagumo(pid):
+    """Acessa os detalhes do item individual para retornar sua descrição detalhada"""
+    url_detalhe = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Product-ShowProductPageAjax?pid={pid}&idLoja={ID_LOJA}"
+    dados = fetch_api_nagumo(url_detalhe)
+    if dados and dados.get('product'):
+        prod = dados['product']
+        return prod.get('longDescription', '') or prod.get('shortDescription', '') or ''
+    return ''
 
 def buscar_nagumo_turbo_total(termo_usuario):
     palavras_chave = remover_acentos(termo_usuario).split()
@@ -242,7 +249,6 @@ def buscar_nagumo_turbo_total(termo_usuario):
     
     termo_api = palavras_chave[0]
     
-    # Executa a simulação do acesso inicial para forçar a criação da sessão correta no servidor deles
     inicializar_sessao_nagumo()
     
     url_inicial = f"https://www.nagumo.com.br/on/demandware.store/Sites-Nagumo-Site/pt_BR/Search-UpdateGrid?q={termo_api}&start=00&sz={ITENS_POR_PAGINA}&idLoja={ID_LOJA}"
@@ -264,7 +270,8 @@ def buscar_nagumo_turbo_total(termo_usuario):
             all_raw_products.extend(res.get('productsSearchResult', []))
             
     vistos = set()
-    final_list = []
+    produtos_filtrados = []
+    itens_para_buscar_descricao = []
     
     for p in all_raw_products:
         pid = p.get('id')
@@ -276,44 +283,64 @@ def buscar_nagumo_turbo_total(termo_usuario):
         if all(k in nome_norm for k in palavras_chave):
             vistos.add(pid)
             
-            sales = p.get('price', {}).get('sales', {})
-            preco_final = float(sales.get('value', 0)) if sales.get('value') else 0.0
+            # Condição para papel higiênico sem metro no título
+            if "papel higi" in nome_norm:
+                _, metros = extrair_rolos_metros_nagumo(nome.lower())
+                if not metros:
+                    itens_para_buscar_descricao.append(p)
+                    continue
             
-            list_price = p.get('price', {}).get('list')
-            preco_normal = float(list_price.get('value', 0)) if (list_price and list_price.get('value')) else preco_final
-            
-            for flag in p.get('flagtypes', []):
-                if flag.get('valueFlag'):
-                    try:
-                        val_flag = float(flag['valueFlag'])
-                        if val_flag < preco_final and val_flag > 0:
-                            preco_normal = preco_final
-                            preco_final = val_flag
-                    except: pass
-            
-            has_promo = (preco_final < preco_normal and preco_normal > 0)
-            
-            is_weighable = p.get('weighable', False)
-            
-            # Extrai descrições caso a API traga, buscando na string os campos mais comuns do Demandware
-            descricao_item = p.get('shortDescription', '') or p.get('longDescription', '') or p.get('description', '')
-            if not descricao_item:
-                descricao_item = " ".join([str(v) for k, v in p.items() if isinstance(v, str) and 'desc' in k.lower()])
+            produtos_filtrados.append((p, ''))
 
-            label = calcular_preco_unitario_nagumo(preco_final, nome, descricao_item, p.get('productMeasureValue'), is_weighable)
-            img_data = p.get('images', {}).get('large', [{}])
-            
-            final_list.append({
-                'productName': nome,
-                'preco_final': preco_final,
-                'preco_normal': preco_normal,
-                'has_promo': has_promo,
-                'calc_label': label,
-                'sort_val': extrair_valor_unitario(label),
-                'img_url': img_data[0].get('alt', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL,
-                'link': p.get('productShowFullUrl', '#')
-            })
-            
+    # Se houver itens pendentes de descrição, busca de forma paralela acelerada
+    if itens_para_buscar_descricao:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futuros = {executor.submit(buscar_descricao_individual_nagumo, p.get('id')): p for p in itens_para_buscar_descricao}
+            for f in as_completed(futuros):
+                p = futuros[f]
+                desc_extraida = f.result()
+                produtos_filtrados.append((p, desc_extraida))
+
+    final_list = []
+    for p, desc_extrares in produtos_filtrados:
+        nome = p.get('productName', '')
+        sales = p.get('price', {}).get('sales', {})
+        preco_final = float(sales.get('value', 0)) if sales.get('value') else 0.0
+        
+        list_price = p.get('price', {}).get('list')
+        preco_normal = float(list_price.get('value', 0)) if (list_price and list_price.get('value')) else preco_final
+        
+        for flag in p.get('flagtypes', []):
+            if flag.get('valueFlag'):
+                try:
+                    val_flag = float(flag['valueFlag'])
+                    if val_flag < preco_final and val_flag > 0:
+                        preco_normal = preco_final
+                        preco_final = val_flag
+                except: pass
+        
+        has_promo = (preco_final < preco_normal and preco_normal > 0)
+        is_weighable = p.get('weighable', False)
+        
+        # Consolida as strings de descrição do JSON original junto à descrição extraída se houver
+        descricao_item = desc_extrares if desc_extrares else (p.get('shortDescription', '') or p.get('longDescription', '') or p.get('description', ''))
+        if not descricao_item and not desc_extrares:
+            descricao_item = " ".join([str(v) for k, v in p.items() if isinstance(v, str) and 'desc' in k.lower()])
+
+        label = calcular_preco_unitario_nagumo(preco_final, nome, descricao_item, p.get('productMeasureValue'), is_weighable)
+        img_data = p.get('images', {}).get('large', [{}])
+        
+        final_list.append({
+            'productName': nome,
+            'preco_final': preco_final,
+            'preco_normal': preco_normal,
+            'has_promo': has_promo,
+            'calc_label': label,
+            'sort_val': extrair_valor_unitario(label),
+            'img_url': img_data[0].get('alt', DEFAULT_IMAGE_URL) if img_data else DEFAULT_IMAGE_URL,
+            'link': p.get('productShowFullUrl', '#')
+        })
+        
     return sorted(final_list, key=lambda x: x['sort_val'])
 
 def buscar_pagina_shibata(termo, pagina):
