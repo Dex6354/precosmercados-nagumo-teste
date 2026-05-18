@@ -133,16 +133,18 @@ def extrair_info_papel_toalha(nome, descricao):
     if m_un: return None, None, int(m_un.group(1)), f"{m_un.group(1)} unidades"
     return None, None, None, None
 
-def calcular_preco_unitario_nagumo(preco_valor, nome, medida_venda, is_weighable=False):
+def calcular_preco_unitario_nagumo(preco_valor, nome, descricao, medida_venda, is_weighable=False):
     nome_lower = nome.lower()
     nome_norm = remover_acentos(nome_lower)
+    descricao_lower = descricao.lower() if descricao else ""
     
-    if "papel higi" in nome_norm:
-        m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)', nome_lower)
+    if "papel higi" in nome_norm or "papel higi" in remover_acentos(descricao_lower):
+        texto_analise = f"{nome_lower} {descricao_lower}"
+        m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)', texto_analise)
         if not m_rolos:
-            m_rolos = re.search(r'(?:leve|pague|c/|com)\s*(\d+)', nome_lower)
+            m_rolos = re.search(r'(?:leve|pague|c/|com|\bl)\s*(\d+)', texto_analise)
             
-        m_metros = re.search(r'(\d+[.,]?\d*)\s*(?:m|metros?)', nome_lower)
+        m_metros = re.search(r'(\d+[.,]?\d*)\s*(?:m\b|metros?)', texto_analise)
         
         if m_rolos and m_metros:
             try:
@@ -279,7 +281,8 @@ def buscar_nagumo_turbo_total(termo_usuario):
             has_promo = (preco_final < preco_normal and preco_normal > 0)
             
             is_weighable = p.get('weighable', False)
-            label = calcular_preco_unitario_nagumo(preco_final, nome, p.get('productMeasureValue'), is_weighable)
+            desc_nagumo = str(p.get('shortDescription') or p.get('longDescription') or p.get('description') or p.get('productDescription') or '')
+            label = calcular_preco_unitario_nagumo(preco_final, nome, desc_nagumo, p.get('productMeasureValue'), is_weighable)
             img_data = p.get('images', {}).get('large', [{}])
             
             final_list.append({
