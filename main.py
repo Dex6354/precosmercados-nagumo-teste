@@ -136,28 +136,36 @@ def extrair_info_papel_toalha(nome, descricao):
 def calcular_preco_unitario_nagumo(preco_valor, nome, descricao, medida_venda, is_weighable=False):
     nome_lower = nome.lower()
     nome_norm = remover_acentos(nome_lower)
-    descricao_lower = descricao.lower() if descricao else ""
     
-    if "papel higi" in nome_norm or "papel higi" in remover_acentos(descricao_lower):
-        texto_analise = f"{nome_lower} {descricao_lower}"
+    if "papel higi" in nome_norm:
+        def extrair_rolos_metros(texto):
+            r, m = None, None
+            m_rolos = re.search(r'\bleve\s*(\d+)', texto)
+            if not m_rolos:
+                m_rolos = re.search(r'\bl(\d+)\s*p\d+', texto)
+            if not m_rolos:
+                m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)\b', texto)
+            if not m_rolos:
+                m_rolos = re.search(r'(?:c/|com)\s*(\d+)', texto)
+            if m_rolos:
+                r = float(m_rolos.group(1))
+                
+            m_metros = re.search(r'(\d+[.,]?\d*)\s*(?:m|metros?)\b', texto)
+            if m_metros:
+                m = float(m_metros.group(1).replace(',', '.'))
+            return r, m
+
+        rolos, metros = extrair_rolos_metros(nome_lower)
         
-        m_rolos = re.search(r'leve\s*(\d+)', texto_analise)
-        if not m_rolos:
-            m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un\b)', texto_analise)
-        if not m_rolos:
-            m_rolos = re.search(r'(?:pague|c/|com)\s*(\d+)', texto_analise)
-        if not m_rolos:
-            m_rolos = re.search(r'\bl(\d+)', texto_analise)
-            
-        m_metros = re.search(r'(\d+[.,]?\d*)\s*(?:m\b|metros?)', texto_analise)
-        
-        if m_rolos and m_metros:
-            try:
-                rolos = float(m_rolos.group(1))
-                metros = float(m_metros.group(1).replace(',', '.'))
-                if rolos > 0 and metros > 0:
-                    return f"R$ {preco_valor / (rolos * metros):.3f}/m".replace('.', ',')
-            except: pass
+        # Só consulta a descrição se faltar alguma informação no título
+        if (not rolos or not metros) and descricao:
+            desc_lower = descricao.lower()
+            r_desc, m_desc = extrair_rolos_metros(desc_lower)
+            if not rolos and r_desc: rolos = r_desc
+            if not metros and m_desc: metros = m_desc
+
+        if rolos and metros and rolos > 0 and metros > 0:
+            return f"R$ {preco_valor / (rolos * metros):.3f}/m".replace('.', ',')
 
     if is_weighable:
         return f"R$ {preco_valor:.2f}/kg".replace('.', ',')
@@ -286,8 +294,13 @@ def buscar_nagumo_turbo_total(termo_usuario):
             has_promo = (preco_final < preco_normal and preco_normal > 0)
             
             is_weighable = p.get('weighable', False)
-            desc_nagumo = str(p.get('shortDescription') or p.get('longDescription') or p.get('description') or p.get('productDescription') or '')
-            label = calcular_preco_unitario_nagumo(preco_final, nome, desc_nagumo, p.get('productMeasureValue'), is_weighable)
+            
+            # Extrai descrições caso a API traga, buscando na string os campos mais comuns do Demandware
+            descricao_item = p.get('shortDescription', '') or p.get('longDescription', '') or p.get('description', '')
+            if not descricao_item:
+                descricao_item = " ".join([str(v) for k, v in p.items() if isinstance(v, str) and 'desc' in k.lower()])
+
+            label = calcular_preco_unitario_nagumo(preco_final, nome, descricao_item, p.get('productMeasureValue'), is_weighable)
             img_data = p.get('images', {}).get('large', [{}])
             
             final_list.append({
