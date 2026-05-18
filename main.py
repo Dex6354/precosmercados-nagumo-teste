@@ -140,9 +140,14 @@ def calcular_preco_unitario_nagumo(preco_valor, nome, descricao, medida_venda, i
     
     if "papel higi" in nome_norm or "papel higi" in remover_acentos(descricao_lower):
         texto_analise = f"{nome_lower} {descricao_lower}"
-        m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un)', texto_analise)
+        
+        m_rolos = re.search(r'leve\s*(\d+)', texto_analise)
         if not m_rolos:
-            m_rolos = re.search(r'(?:leve|pague|c/|com|\bl)\s*(\d+)', texto_analise)
+            m_rolos = re.search(r'(\d+)\s*(?:rolos?|unidades?|un\b)', texto_analise)
+        if not m_rolos:
+            m_rolos = re.search(r'(?:pague|c/|com)\s*(\d+)', texto_analise)
+        if not m_rolos:
+            m_rolos = re.search(r'\bl(\d+)', texto_analise)
             
         m_metros = re.search(r'(\d+[.,]?\d*)\s*(?:m\b|metros?)', texto_analise)
         
