@@ -2,8 +2,8 @@ name: Keep Streamlit Alive
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # Roda a cada 6 horas
-  workflow_dispatch:          # Permite rodar manualmente também
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
   ping:
@@ -29,7 +29,7 @@ jobs:
             const browser = await chromium.launch();
             const page = await browser.newPage();
             console.log('Abrindo o app...');
-            await page.goto('https://precosmercados-nagumo-teste-jnjp7kxzv5yudcgqfyymbh.streamlit.app', { waitUntil: 'networkidle', timeout: 60000 });
+            await page.goto('https://precosmercados-nagumo-teste-jnjp7kxzv5yudcgqfyymbh.streamlit.app/', { waitUntil: 'networkidle', timeout: 60000 });
             
             const btn = page.locator('button:has-text(\"Yes, get this app back up!\")');
             if (await btn.isVisible({ timeout: 8000 }).catch(() => false)) {
