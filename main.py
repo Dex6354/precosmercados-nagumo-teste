@@ -587,10 +587,17 @@ if termo:
     components.html(
         f"""
         <script>
-            const cols = window.parent.document.querySelectorAll('[data-testid="stColumn"]');
-            cols.forEach(col => col.scrollTop = 0);
+            function scrollColunas() {{
+                const cols = window.parent.document.querySelectorAll('[data-testid="stColumn"]');
+                cols.forEach(col => {{ col.scrollTop = 0; }});
+            }}
+            // Tenta imediatamente e repete algumas vezes para garantir que o DOM já foi atualizado
+            scrollColunas();
+            setTimeout(scrollColunas, 100);
+            setTimeout(scrollColunas, 300);
+            setTimeout(scrollColunas, 600);
         </script>
         """,
         height=0,
-        width=0
+        width=0,
     )
