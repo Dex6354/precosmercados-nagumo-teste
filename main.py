@@ -447,34 +447,22 @@ if termo:
                     _, val_folha = calcular_preco_papel_toalha(desc, preco_final)
                     val_unidade, _ = calcular_preco_unidade(desc, preco_final)
 
-                    if 'papel toalha' in remover_acentos(termo).lower() and val_folha:
-                        p['sort_val'] = val_folha
-                    elif 'papel higienico' in remover_acentos(termo).lower() and val_metro:
-                        p['sort_val'] = val_metro
-                    elif val_unidade:
-                        # Descricao ja tinha peso/volume — valor normalizado por kg/L
-                        p['sort_val'] = val_unidade
-                    else:
-                        # Descricao nao tinha peso/volume; usa os campos da API do Shibata
-                        # para normalizar antes de cair no preco_final bruto
-                        u_api = (p.get('unidade_sigla') or '').lower().strip()
-                        if u_api == 'grande': u_api = ''
-                        qtd_api = p.get('quantidade_unidade_diferente')
-                        try:
-                            qtd_api = float(qtd_api) if qtd_api else 1.0
-                        except (TypeError, ValueError):
-                            qtd_api = 1.0
+                    # Fallback: extrai preço unitário do preco_str quando a descrição não tem o peso
+                    # Ex: "R$ 1,80/0,2kg" → 1.80 / 0.2 = 9.00/kg (preço correto para ordenação)
+                    if val_unidade is None:
+                        match_ps = re.search(r"/\s*([\d.,]+)\s*(kg|g|l|ml)", p['preco_str'].lower())
+                        if match_ps:
+                            try:
+                                q = float(match_ps.group(1).replace(",", "."))
+                                u = match_ps.group(2).lower()
+                                if u == "g": q /= 1000
+                                elif u == "ml": q /= 1000
+                                if q > 0: val_unidade = preco_final / q
+                            except: pass
 
-                        if u_api == 'g' and qtd_api > 0:
-                            p['sort_val'] = preco_final / (qtd_api / 1000)
-                        elif u_api == 'ml' and qtd_api > 0:
-                            p['sort_val'] = preco_final / (qtd_api / 1000)
-                        elif u_api in ('kg', 'l') and qtd_api > 1:
-                            # qtd > 1 significa pacote com multiplos kg/L (ex: caixa 10kg)
-                            p['sort_val'] = preco_final / qtd_api
-                        else:
-                            # Vendido por unidade ou kg/L unitario — preco_final ja e o preco base
-                            p['sort_val'] = preco_final
+                    if 'papel toalha' in remover_acentos(termo).lower() and val_folha: p['sort_val'] = val_folha
+                    elif 'papel higienico' in remover_acentos(termo).lower() and val_metro: p['sort_val'] = val_metro
+                    else: p['sort_val'] = val_unidade or preco_final
                     
                     shibata_final.append(p)
         shibata_final = sorted(shibata_final, key=lambda x: x['sort_val'] or 999)
@@ -627,4 +615,4 @@ if termo:
         """,
         height=0,
         width=0,
-    )
+            )
