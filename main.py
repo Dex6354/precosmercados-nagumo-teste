@@ -584,18 +584,20 @@ if termo:
             """, unsafe_allow_html=True)
 
     # --- FORÇAR ROLAGEM PARA O TOPO ---
+    # O timestamp torna o HTML único a cada busca, forçando o Streamlit a recriar
+    # o iframe e re-executar o script (sem isso, o conteúdo idêntico é cacheado).
     components.html(
         f"""
         <script>
+            /* {termo} | {time.time()} */
             function scrollColunas() {{
                 const cols = window.parent.document.querySelectorAll('[data-testid="stColumn"]');
                 cols.forEach(col => {{ col.scrollTop = 0; }});
             }}
-            // Tenta imediatamente e repete algumas vezes para garantir que o DOM já foi atualizado
             scrollColunas();
-            setTimeout(scrollColunas, 100);
-            setTimeout(scrollColunas, 300);
-            setTimeout(scrollColunas, 600);
+            setTimeout(scrollColunas, 150);
+            setTimeout(scrollColunas, 400);
+            setTimeout(scrollColunas, 800);
         </script>
         """,
         height=0,
